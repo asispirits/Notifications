@@ -1,10 +1,17 @@
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Runtime.InteropServices;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -17,12 +24,40 @@ public partial class MainWindow
 {
   private const string HostName = "beamerviewer.local";
   private const string AppFolderName = "Beamer_viewer_app";
+  private const string BeamerTrackBaseUrl = "https://backend.getbeamer.com/track";
 
   private readonly AppConfig _cfg;
   private readonly string _cfgPath;
 
   private bool _allowClose;
   private DateTime _lastForcedForegroundAt = DateTime.MinValue;
+
+  private readonly HttpClient _http = new();
+  private readonly JsonSerializerOptions _jsonOptions = new()
+  {
+    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+  };
+
+  private CancellationTokenSource? _pollCts;
+  private string? _lastStateEnvelopeJson;
+  private readonly object _stateLock = new();
+
+  private string _lastFingerprint = "";
+  private HashSet<string> _knownPostIds = new(StringComparer.Ordinal);
+  private List<UiPost> _latestPosts = new();
+  private int? _lastUnreadCount;
+  private DateTimeOffset _lastPostsFetchAt = DateTimeOffset.MinValue;
+  private AuthMode _authMode = AuthMode.Unknown;
+  private bool _pollStarted;
+  private readonly string _viewerUserId;
+  private readonly string _viewerFirstName;
+  private readonly string _viewerLastName;
+  private readonly string _viewerEmail;
+  private readonly ConcurrentDictionary<string, byte> _trackedViewPostIds = new(StringComparer.Ordinal);
+
+  private static readonly Regex HtmlTagRegex = new("<.*?>", RegexOptions.Compiled | RegexOptions.Singleline);
+  private static readonly TimeSpan PostFetchFallbackInterval = TimeSpan.FromMinutes(3);
 
   private const int WM_CLOSE = 0x0010;
   private const int WM_SYSCOMMAND = 0x0112;
@@ -32,6 +67,15 @@ public partial class MainWindow
 
   private const uint FLASHW_ALL = 3;
   private const uint FLASHW_TIMERNOFG = 12;
+
+  private enum AuthMode
+  {
+    Unknown,
+    BearerHeader,
+    XBeamerApiKeyHeader,
+    XApiKeyHeader,
+    QueryParameter
+  }
 
   [StructLayout(LayoutKind.Sequential)]
   private struct FLASHWINFO
@@ -71,10 +115,30 @@ public partial class MainWindow
   {
     InitializeComponent();
     (_cfg, _cfgPath) = AppConfig.LoadOrCreate();
+    var viewerUserIdSeed = string.IsNullOrWhiteSpace(_cfg.ViewerUserId)
+      ? Environment.UserName
+      : _cfg.ViewerUserId;
+    var viewerNameSeed = string.IsNullOrWhiteSpace(_cfg.ViewerName)
+      ? Environment.MachineName
+      : _cfg.ViewerName;
+
+    _viewerUserId = NormalizeIdentity(viewerUserIdSeed, "local-user");
+    _viewerFirstName = NormalizeIdentity(viewerNameSeed, _viewerUserId);
+    _viewerLastName = "";
+    _viewerEmail = NormalizeOptionalIdentity(_cfg.ViewerEmail, 254);
+
+    _http.Timeout = TimeSpan.FromMilliseconds(_cfg.RequestTimeoutMs);
+    _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
     Closing += (_, e) =>
     {
       if (!_allowClose) e.Cancel = true;
+    };
+
+    Closed += (_, _) =>
+    {
+      try { _pollCts?.Cancel(); } catch { }
+      try { _http.Dispose(); } catch { }
     };
 
     PreviewKeyDown += (_, e) =>
@@ -92,6 +156,46 @@ public partial class MainWindow
     };
 
     Loaded += async (_, _) => await InitAsync();
+  }
+
+  private sealed class UiPost
+  {
+    public string Id { get; init; } = "";
+    public string Title { get; init; } = "";
+    public string Content { get; init; } = "";
+    public string Category { get; init; } = "Update";
+    public string? DateUtc { get; init; }
+    public string? PostUrl { get; init; }
+    public string? LinkUrl { get; init; }
+    public string? LinkText { get; init; }
+    public bool IsPublished { get; init; }
+  }
+
+  private sealed class UiState
+  {
+    public string Status { get; init; } = "loading";
+    public string Message { get; init; } = "";
+    public long RefreshMs { get; init; }
+    public string ConfigPath { get; init; } = "";
+    public string? LastSyncUtc { get; init; }
+    public List<UiPost> Posts { get; init; } = new();
+    public List<string> NewPostIds { get; init; } = new();
+  }
+
+  private sealed class FetchResult
+  {
+    public bool Success { get; init; }
+    public string? ErrorMessage { get; init; }
+    public HttpStatusCode? StatusCode { get; init; }
+    public List<UiPost> Posts { get; init; } = new();
+  }
+
+  private sealed class UnreadCountResult
+  {
+    public bool Success { get; init; }
+    public int Count { get; init; }
+    public string? ErrorMessage { get; init; }
+    public HttpStatusCode? StatusCode { get; init; }
   }
 
   private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -186,51 +290,27 @@ public partial class MainWindow
 
     try { Web.CoreWebView2.Profile.PreferredTrackingPreventionLevel = CoreWebView2TrackingPreventionLevel.None; } catch { }
 
-    Web.CoreWebView2.WebMessageReceived += (_, e) =>
+    Web.CoreWebView2.WebMessageReceived += (_, e) => HandleWebMessage(e.WebMessageAsJson);
+
+    Web.CoreWebView2.NavigationStarting += (_, e) =>
     {
-      try
-      {
-        using var doc = JsonDocument.Parse(e.WebMessageAsJson);
-        if (!doc.RootElement.TryGetProperty("type", out var t)) return;
-        var type = (t.GetString() ?? "").Trim();
+      if (!Uri.TryCreate(e.Uri, UriKind.Absolute, out var uri)) return;
+      if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) return;
+      if (string.Equals(uri.Host, HostName, StringComparison.OrdinalIgnoreCase)) return;
 
-        if (type == "new_message")
-        {
-          Dispatcher.Invoke(() => BringToFront(force: false));
-          return;
-        }
-
-        if (type == "urgent_message")
-        {
-          int? delta = null;
-          if (doc.RootElement.TryGetProperty("payload", out var payload) &&
-              payload.ValueKind == JsonValueKind.Object &&
-              payload.TryGetProperty("delta", out var d))
-          {
-            if (d.ValueKind == JsonValueKind.Number && d.TryGetInt32(out var dInt)) delta = dInt;
-          }
-
-          var force = Dispatcher.Invoke(() => ShouldForceForegroundForUrgent(delta));
-          Dispatcher.Invoke(() => BringToFront(force));
-          if (force)
-          {
-            _ = Dispatcher.InvokeAsync(async () => await ForceOpenWidgetAsync());
-          }
-          return;
-        }
-      }
-      catch
-      {
-      }
+      e.Cancel = true;
+      OpenExternalUrl(uri.ToString());
     };
 
     var appFolder = ResolveWritableAppFolder();
     var indexPath = Path.Combine(appFolder, "index.html");
 
-    if (!File.Exists(indexPath))
+    // Always refresh runtime HTML so UI updates ship with every publish.
+    var html = ReadEmbeddedText("index.html");
+    var wroteIndex = TryWriteText(indexPath, html);
+    if (!wroteIndex && !File.Exists(indexPath))
     {
-      var html = ReadEmbeddedText("index.html");
-      _ = TryWriteText(indexPath, html);
+      throw new IOException($"Unable to write index.html to {indexPath}");
     }
 
     Web.CoreWebView2.SetVirtualHostNameToFolderMapping(
@@ -245,6 +325,11 @@ public partial class MainWindow
       try
       {
         await InjectConfigAndBootAsync();
+        if (!_pollStarted)
+        {
+          _pollStarted = true;
+          StartPolling();
+        }
       }
       catch (Exception ex)
       {
@@ -253,6 +338,958 @@ public partial class MainWindow
     };
 
     Web.Source = new Uri($"https://{HostName}/index.html");
+  }
+
+  private void HandleWebMessage(string json)
+  {
+    try
+    {
+      using var doc = JsonDocument.Parse(json);
+      if (!doc.RootElement.TryGetProperty("type", out var typeProp)) return;
+      var type = (typeProp.GetString() ?? "").Trim();
+
+      if (type == "ui_ready")
+      {
+        SendCachedStateToUi();
+        return;
+      }
+
+      if (type == "open_external")
+      {
+        if (!doc.RootElement.TryGetProperty("payload", out var payload)) return;
+        if (payload.ValueKind != JsonValueKind.Object) return;
+        if (!payload.TryGetProperty("url", out var urlProp)) return;
+        var url = (urlProp.GetString() ?? "").Trim();
+        OpenExternalUrl(url);
+        return;
+      }
+
+      if (type == "mark_read")
+      {
+        if (!doc.RootElement.TryGetProperty("payload", out var payload)) return;
+        if (payload.ValueKind != JsonValueKind.Object) return;
+        if (!payload.TryGetProperty("id", out var idProp)) return;
+
+        var id = (idProp.GetString() ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(id)) return;
+
+        _ = Task.Run(async () =>
+        {
+          try
+          {
+            await TrackPostViewsAsync(new[] { id }, CancellationToken.None);
+          }
+          catch
+          {
+          }
+        });
+      }
+    }
+    catch
+    {
+    }
+  }
+
+  private static void OpenExternalUrl(string url)
+  {
+    try
+    {
+      if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return;
+      if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) return;
+
+      Process.Start(new ProcessStartInfo(uri.ToString()) { UseShellExecute = true });
+    }
+    catch
+    {
+    }
+  }
+
+  private void StartPolling()
+  {
+    _pollCts?.Cancel();
+    _pollCts = new CancellationTokenSource();
+    _ = Task.Run(() => PollLoopAsync(_pollCts.Token));
+  }
+
+  private async Task PollLoopAsync(CancellationToken token)
+  {
+    var refreshMs = Math.Max(1_000, _cfg.RefreshMs);
+
+    await PublishStateAsync(new UiState
+    {
+      Status = "loading",
+      Message = "Starting API sync…",
+      RefreshMs = refreshMs,
+      ConfigPath = _cfgPath,
+      LastSyncUtc = null,
+      Posts = _latestPosts,
+      NewPostIds = new List<string>()
+    });
+
+    while (!token.IsCancellationRequested)
+    {
+      try
+      {
+        await PollOnceAsync(refreshMs, token);
+      }
+      catch (OperationCanceledException)
+      {
+        break;
+      }
+      catch (Exception ex)
+      {
+        await PublishStateAsync(new UiState
+        {
+        Status = "error",
+        Message = $"Unexpected error: {ex.Message}",
+        RefreshMs = refreshMs,
+        ConfigPath = _cfgPath,
+        LastSyncUtc = DateTimeOffset.UtcNow.ToString("O"),
+        Posts = _latestPosts,
+        NewPostIds = new List<string>()
+      });
+      }
+
+      try
+      {
+        await Task.Delay((int)refreshMs, token);
+      }
+      catch (OperationCanceledException)
+      {
+        break;
+      }
+    }
+  }
+
+  private async Task PollOnceAsync(long refreshMs, CancellationToken token)
+  {
+    if (string.IsNullOrWhiteSpace(_cfg.ApiKey))
+    {
+      await PublishStateAsync(new UiState
+      {
+        Status = "config_error",
+        Message = "Missing ApiKey. Add your private Beamer API key in Beamerviewer.config.json and restart.",
+        RefreshMs = refreshMs,
+        ConfigPath = _cfgPath,
+        LastSyncUtc = null,
+        Posts = _latestPosts,
+        NewPostIds = new List<string>()
+      });
+      return;
+    }
+
+    var nowUtc = DateTimeOffset.UtcNow;
+    var unread = await FetchUnreadCountAsync(token);
+
+    var shouldFetchPosts = _latestPosts.Count == 0;
+    if (unread.Success)
+    {
+      if (!_lastUnreadCount.HasValue || unread.Count != _lastUnreadCount.Value)
+      {
+        shouldFetchPosts = true;
+      }
+      _lastUnreadCount = unread.Count;
+    }
+    else if ((nowUtc - _lastPostsFetchAt) >= PostFetchFallbackInterval)
+    {
+      shouldFetchPosts = true;
+    }
+
+    if (!shouldFetchPosts)
+    {
+      var stableStatusMessage = _latestPosts.Count == 0
+        ? "Connected. No posts available."
+        : "Connected. Waiting for new posts...";
+
+      await PublishStateAsync(new UiState
+      {
+        Status = "ok",
+        Message = stableStatusMessage,
+        RefreshMs = refreshMs,
+        ConfigPath = _cfgPath,
+        LastSyncUtc = nowUtc.ToString("O"),
+        Posts = _latestPosts,
+        NewPostIds = new List<string>()
+      });
+      return;
+    }
+
+    var fetch = await FetchPostsAsync(token);
+    if (!fetch.Success)
+    {
+      await PublishStateAsync(new UiState
+      {
+        Status = "error",
+        Message = fetch.ErrorMessage ?? "Failed to fetch Beamer posts.",
+        RefreshMs = refreshMs,
+        ConfigPath = _cfgPath,
+        LastSyncUtc = DateTimeOffset.UtcNow.ToString("O"),
+        Posts = _latestPosts,
+        NewPostIds = new List<string>()
+      });
+      return;
+    }
+
+    _lastPostsFetchAt = nowUtc;
+
+    var posts = fetch.Posts
+      .OrderByDescending(GetSortDate)
+      .ThenByDescending(p => p.Id)
+      .Take(_cfg.MaxPosts)
+      .ToList();
+
+    _latestPosts = posts;
+
+    var fingerprint = BuildFingerprint(posts);
+    var hadSnapshot = !string.IsNullOrWhiteSpace(_lastFingerprint);
+    var hasNew = hadSnapshot && !string.Equals(fingerprint, _lastFingerprint, StringComparison.Ordinal);
+    _lastFingerprint = fingerprint;
+
+    var currentIds = posts
+      .Select(p => p.Id)
+      .Where(id => !string.IsNullOrWhiteSpace(id))
+      .ToHashSet(StringComparer.Ordinal);
+
+    var newPostIds = new List<string>();
+    if (_knownPostIds.Count > 0)
+    {
+      newPostIds = currentIds
+        .Where(id => !_knownPostIds.Contains(id))
+        .ToList();
+    }
+
+    _knownPostIds = currentIds;
+
+    if (hasNew && newPostIds.Count == 0 && posts.Count > 0 && !string.IsNullOrWhiteSpace(posts[0].Id))
+    {
+      newPostIds.Add(posts[0].Id);
+    }
+
+    if (hasNew)
+    {
+      var delta = Math.Max(1, newPostIds.Count);
+      await Dispatcher.InvokeAsync(() =>
+      {
+        var force = ShouldForceForegroundForUrgent(delta);
+        BringToFront(force);
+      });
+    }
+
+    var statusMessage = posts.Count == 0
+      ? "Connected. No posts available."
+      : hasNew
+        ? $"Received {Math.Max(1, newPostIds.Count)} new post(s)."
+        : $"Connected. {posts.Count} post(s) loaded.";
+
+    await PublishStateAsync(new UiState
+    {
+      Status = "ok",
+      Message = statusMessage,
+      RefreshMs = refreshMs,
+      ConfigPath = _cfgPath,
+      LastSyncUtc = DateTimeOffset.UtcNow.ToString("O"),
+      Posts = posts,
+      NewPostIds = hasNew ? newPostIds : new List<string>()
+    });
+  }
+
+  private async Task<FetchResult> FetchPostsAsync(CancellationToken token)
+  {
+    HttpStatusCode? lastStatus = null;
+    string? lastAuthError = null;
+
+    foreach (var mode in GetAuthModesToTry())
+    {
+      using var req = BuildPostsRequest(mode);
+
+      HttpResponseMessage resp;
+      string raw;
+
+      try
+      {
+        resp = await _http.SendAsync(req, token);
+        raw = await resp.Content.ReadAsStringAsync(token);
+      }
+      catch (OperationCanceledException)
+      {
+        throw;
+      }
+      catch (Exception ex)
+      {
+        return new FetchResult
+        {
+          Success = false,
+          ErrorMessage = $"Network error: {ex.Message}"
+        };
+      }
+
+      if (resp.IsSuccessStatusCode)
+      {
+        List<UiPost> posts;
+        try
+        {
+          posts = ParsePosts(raw);
+        }
+        catch (Exception ex)
+        {
+          return new FetchResult
+          {
+            Success = false,
+            ErrorMessage = $"Invalid API response format: {ex.Message}",
+            StatusCode = resp.StatusCode
+          };
+        }
+
+        _authMode = mode;
+        return new FetchResult
+        {
+          Success = true,
+          Posts = posts,
+          StatusCode = resp.StatusCode
+        };
+      }
+
+      lastStatus = resp.StatusCode;
+      var detail = ExtractMessage(raw);
+
+      if (resp.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+      {
+        lastAuthError = string.IsNullOrWhiteSpace(detail) ? "Authentication failed." : detail;
+        continue;
+      }
+
+      return new FetchResult
+      {
+        Success = false,
+        StatusCode = resp.StatusCode,
+        ErrorMessage = $"Beamer API error {(int)resp.StatusCode}: {detail}"
+      };
+    }
+
+    return new FetchResult
+    {
+      Success = false,
+      StatusCode = lastStatus,
+      ErrorMessage = string.IsNullOrWhiteSpace(lastAuthError)
+        ? "Authentication failed. Verify ApiKey in config."
+        : $"Authentication failed: {lastAuthError}"
+    };
+  }
+
+  private async Task<UnreadCountResult> FetchUnreadCountAsync(CancellationToken token)
+  {
+    HttpStatusCode? lastStatus = null;
+    string? lastAuthError = null;
+
+    foreach (var mode in GetAuthModesToTry())
+    {
+      using var req = BuildUnreadCountRequest(mode);
+
+      HttpResponseMessage resp;
+      string raw;
+
+      try
+      {
+        resp = await _http.SendAsync(req, token);
+        raw = await resp.Content.ReadAsStringAsync(token);
+      }
+      catch (OperationCanceledException)
+      {
+        throw;
+      }
+      catch (Exception ex)
+      {
+        return new UnreadCountResult
+        {
+          Success = false,
+          ErrorMessage = $"Network error: {ex.Message}"
+        };
+      }
+
+      if (resp.IsSuccessStatusCode)
+      {
+        int count;
+        try
+        {
+          count = ParseUnreadCount(raw);
+        }
+        catch (Exception ex)
+        {
+          return new UnreadCountResult
+          {
+            Success = false,
+            ErrorMessage = $"Invalid unread count response format: {ex.Message}",
+            StatusCode = resp.StatusCode
+          };
+        }
+
+        _authMode = mode;
+        return new UnreadCountResult
+        {
+          Success = true,
+          Count = count,
+          StatusCode = resp.StatusCode
+        };
+      }
+
+      lastStatus = resp.StatusCode;
+      var detail = ExtractMessage(raw);
+
+      if (resp.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+      {
+        lastAuthError = string.IsNullOrWhiteSpace(detail) ? "Authentication failed." : detail;
+        continue;
+      }
+
+      return new UnreadCountResult
+      {
+        Success = false,
+        StatusCode = resp.StatusCode,
+        ErrorMessage = $"Beamer API error {(int)resp.StatusCode}: {detail}"
+      };
+    }
+
+    return new UnreadCountResult
+    {
+      Success = false,
+      StatusCode = lastStatus,
+      ErrorMessage = string.IsNullOrWhiteSpace(lastAuthError)
+        ? "Authentication failed. Verify ApiKey in config."
+        : $"Authentication failed: {lastAuthError}"
+    };
+  }
+
+  private IEnumerable<AuthMode> GetAuthModesToTry()
+  {
+    var all = new[]
+    {
+      AuthMode.BearerHeader,
+      AuthMode.XBeamerApiKeyHeader,
+      AuthMode.XApiKeyHeader,
+      AuthMode.QueryParameter
+    };
+
+    if (_authMode == AuthMode.Unknown) return all;
+    return new[] { _authMode }.Concat(all.Where(m => m != _authMode));
+  }
+
+  private HttpRequestMessage BuildPostsRequest(AuthMode mode)
+  {
+    var includeApiKeyInQuery = mode == AuthMode.QueryParameter;
+    var uri = BuildPostsUri(includeApiKeyInQuery);
+
+    var req = new HttpRequestMessage(HttpMethod.Get, uri);
+    req.Headers.Accept.Clear();
+    req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+    var key = _cfg.ApiKey;
+
+    switch (mode)
+    {
+      case AuthMode.BearerHeader:
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+        break;
+
+      case AuthMode.XBeamerApiKeyHeader:
+        req.Headers.TryAddWithoutValidation("X-Beamer-API-Key", key);
+        req.Headers.TryAddWithoutValidation("Beamer-API-Key", key);
+        break;
+
+      case AuthMode.XApiKeyHeader:
+        req.Headers.TryAddWithoutValidation("X-API-Key", key);
+        req.Headers.TryAddWithoutValidation("API-Key", key);
+        break;
+
+      case AuthMode.QueryParameter:
+      case AuthMode.Unknown:
+      default:
+        break;
+    }
+
+    return req;
+  }
+
+  private HttpRequestMessage BuildUnreadCountRequest(AuthMode mode)
+  {
+    var includeApiKeyInQuery = mode == AuthMode.QueryParameter;
+    var uri = BuildUnreadCountUri(includeApiKeyInQuery);
+
+    var req = new HttpRequestMessage(HttpMethod.Get, uri);
+    req.Headers.Accept.Clear();
+    req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+    var key = _cfg.ApiKey;
+
+    switch (mode)
+    {
+      case AuthMode.BearerHeader:
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", key);
+        break;
+
+      case AuthMode.XBeamerApiKeyHeader:
+        req.Headers.TryAddWithoutValidation("X-Beamer-API-Key", key);
+        req.Headers.TryAddWithoutValidation("Beamer-API-Key", key);
+        break;
+
+      case AuthMode.XApiKeyHeader:
+        req.Headers.TryAddWithoutValidation("X-API-Key", key);
+        req.Headers.TryAddWithoutValidation("API-Key", key);
+        break;
+
+      case AuthMode.QueryParameter:
+      case AuthMode.Unknown:
+      default:
+        break;
+    }
+
+    return req;
+  }
+
+  private Uri BuildPostsUri(bool includeApiKey)
+  {
+    var baseUrl = _cfg.ApiBaseUrl.TrimEnd('/');
+    var path = $"{baseUrl}/posts";
+
+    var query = new List<string>();
+    if (!string.IsNullOrWhiteSpace(_cfg.ProductId))
+    {
+      query.Add($"product_id={Uri.EscapeDataString(_cfg.ProductId)}");
+      query.Add($"productId={Uri.EscapeDataString(_cfg.ProductId)}");
+    }
+
+    AppendViewerIdentityQuery(query);
+
+    if (_cfg.MaxPosts > 0)
+    {
+      query.Add($"limit={_cfg.MaxPosts}");
+      query.Add($"per_page={_cfg.MaxPosts}");
+    }
+
+    if (includeApiKey && !string.IsNullOrWhiteSpace(_cfg.ApiKey))
+      query.Add($"api_key={Uri.EscapeDataString(_cfg.ApiKey)}");
+
+    if (query.Count == 0) return new Uri(path);
+    return new Uri($"{path}?{string.Join("&", query)}");
+  }
+
+  private Uri BuildUnreadCountUri(bool includeApiKey)
+  {
+    var baseUrl = _cfg.ApiBaseUrl.TrimEnd('/');
+    var path = $"{baseUrl}/unread/count";
+
+    var query = new List<string>();
+    if (!string.IsNullOrWhiteSpace(_cfg.ProductId))
+    {
+      query.Add($"product_id={Uri.EscapeDataString(_cfg.ProductId)}");
+      query.Add($"productId={Uri.EscapeDataString(_cfg.ProductId)}");
+    }
+
+    AppendViewerIdentityQuery(query);
+
+    if (includeApiKey && !string.IsNullOrWhiteSpace(_cfg.ApiKey))
+      query.Add($"api_key={Uri.EscapeDataString(_cfg.ApiKey)}");
+
+    if (query.Count == 0) return new Uri(path);
+    return new Uri($"{path}?{string.Join("&", query)}");
+  }
+
+  private async Task TrackPostViewsAsync(IEnumerable<string> postIds, CancellationToken token)
+  {
+    if (!_cfg.EnableViewTracking) return;
+    if (string.IsNullOrWhiteSpace(_cfg.ProductId)) return;
+
+    foreach (var postId in postIds
+      .Where(id => !string.IsNullOrWhiteSpace(id))
+      .Select(id => id.Trim())
+      .Distinct(StringComparer.Ordinal))
+    {
+      if (!_trackedViewPostIds.TryAdd(postId, 0)) continue;
+
+      var tracked = await TrackSinglePostViewAsync(postId, token);
+      if (!tracked)
+      {
+        _trackedViewPostIds.TryRemove(postId, out _);
+      }
+    }
+  }
+
+  private async Task<bool> TrackSinglePostViewAsync(string postId, CancellationToken token)
+  {
+    try
+    {
+      using var req = new HttpRequestMessage(HttpMethod.Post, BuildTrackUri(postId));
+      using var resp = await _http.SendAsync(req, token);
+      return resp.IsSuccessStatusCode;
+    }
+    catch (OperationCanceledException)
+    {
+      throw;
+    }
+    catch
+    {
+      return false;
+    }
+  }
+
+  private Uri BuildTrackUri(string postId)
+  {
+    var query = new List<string>
+    {
+      $"product={Uri.EscapeDataString(_cfg.ProductId)}",
+      $"id={Uri.EscapeDataString(postId)}"
+    };
+
+    AppendViewerIdentityQuery(query);
+
+    return new Uri($"{BeamerTrackBaseUrl}?{string.Join("&", query)}");
+  }
+
+  private void AppendViewerIdentityQuery(List<string> query)
+  {
+    if (!string.IsNullOrWhiteSpace(_viewerUserId))
+    {
+      query.Add($"user_id={Uri.EscapeDataString(_viewerUserId)}");
+      query.Add($"custom_user_id={Uri.EscapeDataString(_viewerUserId)}");
+      query.Add($"userId={Uri.EscapeDataString(_viewerUserId)}");
+      query.Add($"customUserId={Uri.EscapeDataString(_viewerUserId)}");
+    }
+
+    if (!string.IsNullOrWhiteSpace(_viewerFirstName))
+    {
+      query.Add($"user_firstname={Uri.EscapeDataString(_viewerFirstName)}");
+      query.Add($"firstname={Uri.EscapeDataString(_viewerFirstName)}");
+      query.Add($"userFirstName={Uri.EscapeDataString(_viewerFirstName)}");
+      query.Add($"firstName={Uri.EscapeDataString(_viewerFirstName)}");
+    }
+
+    if (!string.IsNullOrWhiteSpace(_viewerLastName))
+    {
+      query.Add($"user_lastname={Uri.EscapeDataString(_viewerLastName)}");
+      query.Add($"lastname={Uri.EscapeDataString(_viewerLastName)}");
+      query.Add($"userLastName={Uri.EscapeDataString(_viewerLastName)}");
+      query.Add($"lastName={Uri.EscapeDataString(_viewerLastName)}");
+    }
+
+    if (!string.IsNullOrWhiteSpace(_viewerEmail))
+    {
+      query.Add($"user_email={Uri.EscapeDataString(_viewerEmail)}");
+      query.Add($"email={Uri.EscapeDataString(_viewerEmail)}");
+      query.Add($"userEmail={Uri.EscapeDataString(_viewerEmail)}");
+    }
+  }
+
+  private static string NormalizeIdentity(string? value, string fallback)
+  {
+    var v = (value ?? "").Trim();
+    if (string.IsNullOrWhiteSpace(v)) return fallback;
+    return v.Length <= 120 ? v : v[..120];
+  }
+
+  private static string NormalizeOptionalIdentity(string? value, int maxLength)
+  {
+    var v = (value ?? "").Trim();
+    if (string.IsNullOrWhiteSpace(v)) return "";
+    return v.Length <= maxLength ? v : v[..maxLength];
+  }
+
+  private static string BuildFingerprint(IReadOnlyList<UiPost> posts)
+  {
+    if (posts.Count == 0) return "empty";
+
+    var top = posts[0];
+    return string.Join("|", new[]
+    {
+      top.Id ?? "",
+      top.DateUtc ?? "",
+      top.Title ?? "",
+      top.Content ?? ""
+    });
+  }
+
+  private async Task PublishStateAsync(UiState state)
+  {
+    var envelopeJson = JsonSerializer.Serialize(new
+    {
+      type = "state",
+      payload = state
+    }, _jsonOptions);
+
+    lock (_stateLock)
+    {
+      _lastStateEnvelopeJson = envelopeJson;
+    }
+
+    await Dispatcher.InvokeAsync(() =>
+    {
+      try
+      {
+        if (Web.CoreWebView2 is null) return;
+        Web.CoreWebView2.PostWebMessageAsJson(envelopeJson);
+      }
+      catch
+      {
+      }
+    });
+  }
+
+  private void SendCachedStateToUi()
+  {
+    string? envelope;
+    lock (_stateLock)
+    {
+      envelope = _lastStateEnvelopeJson;
+    }
+
+    if (string.IsNullOrWhiteSpace(envelope)) return;
+
+    try
+    {
+      Web.CoreWebView2?.PostWebMessageAsJson(envelope);
+    }
+    catch
+    {
+    }
+  }
+
+  private static List<UiPost> ParsePosts(string rawJson)
+  {
+    if (string.IsNullOrWhiteSpace(rawJson)) return new List<UiPost>();
+
+    using var doc = JsonDocument.Parse(rawJson);
+    var postCandidates = new List<JsonElement>();
+    CollectPostCandidates(doc.RootElement, postCandidates, depth: 0);
+
+    var posts = new List<UiPost>();
+    foreach (var candidate in postCandidates)
+    {
+      if (candidate.ValueKind != JsonValueKind.Object) continue;
+      var mapped = MapPost(candidate);
+      if (mapped is null) continue;
+      posts.Add(mapped);
+    }
+
+    return posts;
+  }
+
+  private static void CollectPostCandidates(JsonElement node, List<JsonElement> sink, int depth)
+  {
+    if (depth > 6) return;
+
+    if (node.ValueKind == JsonValueKind.Array)
+    {
+      if (LooksLikePostsArray(node))
+      {
+        foreach (var item in node.EnumerateArray()) sink.Add(item);
+        return;
+      }
+
+      foreach (var item in node.EnumerateArray())
+      {
+        CollectPostCandidates(item, sink, depth + 1);
+      }
+
+      return;
+    }
+
+    if (node.ValueKind != JsonValueKind.Object) return;
+
+    var preferredKeys = new[] { "posts", "data", "results", "items", "rows" };
+    foreach (var key in preferredKeys)
+    {
+      if (!node.TryGetProperty(key, out var candidate)) continue;
+      if (candidate.ValueKind != JsonValueKind.Array) continue;
+      if (!LooksLikePostsArray(candidate)) continue;
+
+      foreach (var item in candidate.EnumerateArray()) sink.Add(item);
+      return;
+    }
+
+    foreach (var prop in node.EnumerateObject())
+    {
+      CollectPostCandidates(prop.Value, sink, depth + 1);
+    }
+  }
+
+  private static bool LooksLikePostsArray(JsonElement arr)
+  {
+    if (arr.ValueKind != JsonValueKind.Array) return false;
+
+    foreach (var item in arr.EnumerateArray())
+    {
+      if (item.ValueKind != JsonValueKind.Object) continue;
+
+      if (
+        item.TryGetProperty("title", out _) ||
+        item.TryGetProperty("content", out _) ||
+        item.TryGetProperty("contentHtml", out _) ||
+        item.TryGetProperty("postUrl", out _)
+      )
+      {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private static UiPost? MapPost(JsonElement obj)
+  {
+    var id = ReadString(obj, "id") ?? ReadString(obj, "postId") ?? "";
+    var title = ReadString(obj, "title") ?? "Untitled post";
+
+    var content = ReadString(obj, "content");
+    var contentHtml = ReadString(obj, "contentHtml");
+
+    if (string.IsNullOrWhiteSpace(content) && !string.IsNullOrWhiteSpace(contentHtml))
+    {
+      content = HtmlToPlainText(contentHtml);
+    }
+
+    var dateRaw = ReadString(obj, "date")
+      ?? ReadString(obj, "publishedAt")
+      ?? ReadString(obj, "createdAt")
+      ?? ReadString(obj, "updatedAt");
+
+    var post = new UiPost
+    {
+      Id = id,
+      Title = title,
+      Content = content?.Trim() ?? "",
+      Category = ReadString(obj, "category") ?? "Update",
+      DateUtc = ParseDateToIsoUtc(dateRaw),
+      PostUrl = ReadString(obj, "postUrl") ?? ReadString(obj, "url"),
+      LinkUrl = ReadString(obj, "linkUrl"),
+      LinkText = ReadString(obj, "linkText"),
+      IsPublished = ReadBool(obj, "published") ?? true
+    };
+
+    return post;
+  }
+
+  private static string? ParseDateToIsoUtc(string? raw)
+  {
+    if (string.IsNullOrWhiteSpace(raw)) return null;
+
+    return DateTimeOffset.TryParse(raw, out var dto)
+      ? dto.UtcDateTime.ToString("O")
+      : null;
+  }
+
+  private static DateTimeOffset GetSortDate(UiPost post)
+  {
+    if (string.IsNullOrWhiteSpace(post.DateUtc)) return DateTimeOffset.MinValue;
+    return DateTimeOffset.TryParse(post.DateUtc, out var dto) ? dto : DateTimeOffset.MinValue;
+  }
+
+  private static string HtmlToPlainText(string html)
+  {
+    if (string.IsNullOrWhiteSpace(html)) return "";
+
+    var noTags = HtmlTagRegex.Replace(html, " ");
+    var decoded = WebUtility.HtmlDecode(noTags);
+    var normalized = Regex.Replace(decoded, @"\s+", " ").Trim();
+    return normalized;
+  }
+
+  private static string? ReadString(JsonElement obj, string propertyName)
+  {
+    if (!obj.TryGetProperty(propertyName, out var value)) return null;
+
+    return value.ValueKind switch
+    {
+      JsonValueKind.String => value.GetString(),
+      JsonValueKind.Number => value.GetRawText(),
+      JsonValueKind.True => "true",
+      JsonValueKind.False => "false",
+      _ => null
+    };
+  }
+
+  private static bool? ReadBool(JsonElement obj, string propertyName)
+  {
+    if (!obj.TryGetProperty(propertyName, out var value)) return null;
+
+    if (value.ValueKind == JsonValueKind.True) return true;
+    if (value.ValueKind == JsonValueKind.False) return false;
+
+    if (value.ValueKind == JsonValueKind.String)
+    {
+      var s = value.GetString();
+      if (bool.TryParse(s, out var b)) return b;
+      if (string.Equals(s, "1", StringComparison.Ordinal)) return true;
+      if (string.Equals(s, "0", StringComparison.Ordinal)) return false;
+    }
+
+    if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var n))
+    {
+      return n != 0;
+    }
+
+    return null;
+  }
+
+  private static string ExtractMessage(string? body)
+  {
+    if (string.IsNullOrWhiteSpace(body)) return "No response body.";
+
+    var trimmed = body.Trim();
+
+    if (trimmed.StartsWith("{") || trimmed.StartsWith("["))
+    {
+      try
+      {
+        using var doc = JsonDocument.Parse(trimmed);
+
+        var root = doc.RootElement;
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+          if (root.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String)
+            return m.GetString() ?? "Unknown API error.";
+
+          if (root.TryGetProperty("error", out var e) && e.ValueKind == JsonValueKind.String)
+            return e.GetString() ?? "Unknown API error.";
+        }
+      }
+      catch
+      {
+      }
+    }
+
+    if (trimmed.Length <= 300) return trimmed;
+    return trimmed[..300] + "…";
+  }
+
+  private static int ParseUnreadCount(string rawJson)
+  {
+    if (string.IsNullOrWhiteSpace(rawJson)) return 0;
+
+    using var doc = JsonDocument.Parse(rawJson);
+    var root = doc.RootElement;
+
+    if (root.ValueKind == JsonValueKind.Number && root.TryGetInt32(out var direct))
+    {
+      return Math.Max(0, direct);
+    }
+
+    if (root.ValueKind != JsonValueKind.Object) return 0;
+
+    var candidateKeys = new[] { "number", "count", "unread", "unreadCount", "unread_count", "total" };
+    foreach (var key in candidateKeys)
+    {
+      if (!root.TryGetProperty(key, out var value)) continue;
+
+      if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var n))
+      {
+        return Math.Max(0, n);
+      }
+
+      if (value.ValueKind == JsonValueKind.String && int.TryParse(value.GetString(), out var parsed))
+      {
+        return Math.Max(0, parsed);
+      }
+    }
+
+    return 0;
   }
 
   private bool ShouldForceForegroundForUrgent(int? unreadDelta)
@@ -344,40 +1381,16 @@ public partial class MainWindow
     }
   }
 
-  private async Task ForceOpenWidgetAsync()
-  {
-    try
-    {
-      if (Web.CoreWebView2 is null) return;
-      await Web.ExecuteScriptAsync("(function(){ if (window.__BV_FORCE_OPEN__) window.__BV_FORCE_OPEN__(); })();");
-    }
-    catch
-    {
-    }
-  }
-
   private async Task InjectConfigAndBootAsync()
   {
     var payload = new
     {
-      product_id = _cfg.ProductId,
-      user_id = _cfg.UserId,
       refresh_ms = _cfg.RefreshMs,
-      widget_width = _cfg.WidgetWidth,
-      auto_open_on_launch = _cfg.AutoOpenOnLaunch,
-      manual_close_cooldown_ms = _cfg.ManualCloseCooldownMs,
-      pulse_on_new_message = _cfg.PulseOnNewMessage,
-      pulse_min_interval_ms = _cfg.PulseMinIntervalMs,
-      force_foreground_on_urgent = _cfg.ForceForegroundOnUrgent,
-      urgent_focus_unread_delta = _cfg.UrgentFocusUnreadDelta,
-      focus_steal_cooldown_ms = _cfg.FocusStealCooldownMs,
+      max_posts = _cfg.MaxPosts,
       config_path = _cfgPath
     };
 
-    var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions
-    {
-      Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
-    });
+    var json = JsonSerializer.Serialize(payload, _jsonOptions);
 
     var js = $$"""
       (function(){

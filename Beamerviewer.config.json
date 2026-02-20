@@ -1,7 +1,14 @@
 {
   "ProductId": "vEjlRlWp82033",
   "UserId": "",
-  "RefreshMs": 60000,
+  "ViewerUserId": "",
+  "ViewerName": "",
+  "ViewerEmail": "",
+  "ApiKey": "",
+  "ApiBaseUrl": "https://api.getbeamer.com/v0",
+  "MaxPosts": 25,
+  "RequestTimeoutMs": 10000,
+  "RefreshMs": 5000,
   "WidgetWidth": 520,
   "AutoOpenOnLaunch": true,
   "ManualCloseCooldownMs": 6000,
@@ -9,5 +16,6 @@
   "PulseMinIntervalMs": 15000,
   "ForceForegroundOnUrgent": false,
   "UrgentFocusUnreadDelta": 3,
-  "FocusStealCooldownMs": 45000
+  "FocusStealCooldownMs": 45000,
+  "EnableViewTracking": true
 }

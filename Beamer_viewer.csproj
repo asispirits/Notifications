@@ -22,6 +22,7 @@
   <ItemGroup>
     <EmbeddedResource Include="index.html" />
     <EmbeddedResource Include="Beamerviewer.config.json" />
+    <Resource Include="Assets/app_icon.png" />
   </ItemGroup>
 
 </Project>

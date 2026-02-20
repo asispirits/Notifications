@@ -5,508 +5,494 @@
     <title>Beamer_viewer</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
-      :root{
-        --bg:#0b1f3a;
-        --beamer-width: 520px;
+      :root {
+        --bg-0: #071a2f;
+        --bg-1: #0a2442;
+        --panel: #102f53;
+        --panel-muted: #143b66;
+        --text-main: #e8f1ff;
+        --text-muted: #9bb8dc;
+        --accent: #2ed3a0;
+        --accent-2: #5be0ff;
+        --danger: #ff7a7a;
+        --ok: #39d98a;
+        --radius: 14px;
       }
-      html, body { height: 100%; }
-      body{
-        margin:0;
-        background: var(--bg);
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        height: 100%;
+      }
+
+      body {
+        margin: 0;
+        color: var(--text-main);
+        background:
+          radial-gradient(1200px 600px at -20% -10%, #1a4a7f55 0%, #00000000 60%),
+          radial-gradient(900px 500px at 120% 110%, #1bbf9f2b 0%, #00000000 60%),
+          linear-gradient(160deg, var(--bg-0), var(--bg-1));
+        font-family: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
         overflow: hidden;
-        font-family: -apple-system, Segoe UI, system-ui, Arial, sans-serif;
       }
 
-      #beamerBell.bv-bell{
-        position: fixed;
-        right: 18px;
-        bottom: 18px;
-        z-index: 2147483647;
-        width: 74px;
-        height: 74px;
+      .app {
+        height: 100%;
+        display: grid;
+        grid-template-rows: auto auto 1fr;
+      }
+
+      .top {
+        padding: 16px 16px 10px;
+        border-bottom: 1px solid #25517f66;
+        background: linear-gradient(180deg, #0e2a4bcc 0%, #0e2a4b88 100%);
+        backdrop-filter: blur(8px);
+      }
+
+      .top-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 700;
+        letter-spacing: 0.2px;
+      }
+
+      .title-dot {
+        width: 10px;
+        height: 10px;
         border-radius: 999px;
-        border: 0;
+        background: var(--ok);
+        box-shadow: 0 0 0 6px #39d98a22;
+      }
+
+      .meta {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--text-muted);
+        font-size: 12px;
+      }
+
+      .pill {
+        border: 1px solid #2a5988;
+        border-radius: 999px;
+        padding: 4px 10px;
+        background: #0f3157;
+      }
+
+      .status {
+        margin: 12px 16px 0;
+        border-radius: 10px;
+        padding: 10px 12px;
+        font-size: 12px;
+        line-height: 1.4;
+        border: 1px solid #2a5e91;
+        background: #11365e;
+        color: var(--text-main);
+      }
+
+      .status.ok {
+        border-color: #1f7f5f;
+        background: #0e3a30;
+      }
+
+      .status.warn {
+        border-color: #7d5d2f;
+        background: #3f2e16;
+      }
+
+      .status.error {
+        border-color: #7f3131;
+        background: #3d1e1e;
+      }
+
+      .feed {
+        min-height: 0;
+        overflow: auto;
+        padding: 14px 12px 16px;
+        display: grid;
+        grid-template-columns: 1fr;
+        align-content: start;
+        gap: 10px;
+      }
+
+      .empty {
+        margin: 24px 6px 0;
+        padding: 16px;
+        border-radius: var(--radius);
+        border: 1px dashed #2f669a;
+        color: var(--text-muted);
+        text-align: center;
+        background: #0f31534d;
+      }
+
+      .card {
+        border: 1px solid #4f95d3;
+        border-radius: var(--radius);
+        background: linear-gradient(180deg, #1a5b92 0%, #174a79 100%);
+        padding: 12px;
+        box-shadow: 0 8px 26px #051b3166, inset 0 1px 0 #9dd5ff33;
+      }
+
+      .card.new {
+        border-color: #62cbff;
+        box-shadow: 0 0 0 1px #62cbff66, 0 10px 32px #0e3c66a8;
+      }
+
+      .card-head {
+        display: flex;
+        align-items: start;
+        justify-content: space-between;
+        gap: 10px;
+      }
+
+      .card-title {
+        margin: 0;
+        font-size: 15px;
+        line-height: 1.3;
+      }
+
+      .card-meta {
+        margin-top: 6px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+      }
+
+      .badge {
+        border: 1px solid #63afea;
+        background: #1d5f97;
+        color: #e8f4ff;
+        border-radius: 999px;
+        padding: 2px 8px;
+        font-size: 11px;
+      }
+
+      .time {
+        color: var(--text-muted);
+        font-size: 11px;
+      }
+
+      .content {
+        margin: 10px 0 0;
+        white-space: pre-wrap;
+        font-size: 13px;
+        line-height: 1.45;
+        color: #dfecff;
+      }
+
+      .card-actions {
+        margin-top: 10px;
+        display: flex;
+        justify-content: flex-end;
+      }
+
+      .link-btn {
+        border: 1px solid #2d7cbb;
+        background: linear-gradient(180deg, #1a5e95, #174f80);
+        color: #ecf6ff;
+        padding: 6px 10px;
+        border-radius: 9px;
+        font-size: 12px;
         cursor: pointer;
-        background: #19d3a2;
-        box-shadow: 0 16px 50px rgba(0,0,0,.35);
-        display: grid !important;
-        place-items: center;
-        transition: opacity .12s ease, transform .12s ease;
-        opacity: 1 !important;
-        visibility: visible !important;
-        pointer-events: auto !important;
-      }
-      #beamerBell.bv-bell:active{ transform: translateY(1px); }
-      #beamerBell.bv-bell svg{ width: 30px; height: 30px; fill: #0b1f3a; }
-
-      body.beamer-open #beamerBell.bv-bell{
-        opacity: 0 !important;
-        pointer-events: none !important;
       }
 
-      @keyframes bvPulse {
-        0% { transform: scale(1); box-shadow: 0 16px 50px rgba(0,0,0,.35); }
-        35% { transform: scale(1.08); box-shadow: 0 20px 70px rgba(25,211,162,.45); }
-        70% { transform: scale(1.02); box-shadow: 0 18px 60px rgba(25,211,162,.35); }
-        100% { transform: scale(1); box-shadow: 0 16px 50px rgba(0,0,0,.35); }
+      .link-btn:hover {
+        filter: brightness(1.06);
       }
-      #beamerBell.bv-bell.pulse{ animation: bvPulse 650ms ease-in-out 1; }
 
-      #beamerOverlay,
-      #beamerOverlayWrapper,
-      .beamerOverlay,
-      .beamer-overlay,
-      .beamer-panel,
-      .beamerPanel,
-      .beamer-changelog,
-      .beamerChangelog{
-        width: min(var(--beamer-width), 100vw) !important;
-        max-width: min(var(--beamer-width), 100vw) !important;
-        height: 100vh !important;
+      .mark-read-btn {
+        border-color: #69b9ec;
+        background: linear-gradient(180deg, #2879b8, #1f6298);
+      }
+
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
       }
     </style>
   </head>
-
   <body>
-    <button class="bv-bell" id="beamerBell" type="button" aria-label="Open messages">
-      <svg viewBox="0 0 24 24" aria-hidden="true">
-        <path d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 1 0-14 0v5l-2 2v1h18v-1l-2-2Z"/>
-      </svg>
-    </button>
+    <div class="app">
+      <div class="top">
+        <div class="top-row">
+          <div class="title">
+            <span class="title-dot" id="titleDot"></span>
+            <span>Beamer Viewer</span>
+          </div>
+          <div class="meta">
+            <span class="pill" id="countPill">Posts: --</span>
+          </div>
+        </div>
+      </div>
+
+      <div id="status" class="status">Starting…</div>
+
+      <main id="feed" class="feed" aria-live="polite"></main>
+    </div>
 
     <script>
       (function () {
-        const BEAMER_SRC = "https://app.getbeamer.com/js/beamer-embed.js";
-
-        let refreshTimer = null;
-        let heartbeatTimer = null;
         let booted = false;
-        let refreshing = false;
+        const READ_IDS_KEY = "bv_read_post_ids_v1";
 
-        let lastManualCloseAt = 0;
+        const state = {
+          status: "loading",
+          message: "Starting…",
+          refreshMs: 0,
+          lastSyncUtc: null,
+          configPath: "",
+          posts: [],
+          newPostIds: []
+        };
+        const readPostIds = new Set();
 
-        let manualCloseCooldownMs = 6000;
-        let pulseOnNewMessage = true;
-        let pulseMinIntervalMs = 15000;
-        let lastPulseAt = 0;
+        function byId(id) {
+          return document.getElementById(id);
+        }
 
-        let syncScheduled = false;
-        let lastOpen = null;
-
-        function now() { return Date.now(); }
-        function bellEl() { return document.getElementById("beamerBell"); }
+        function htmlEscape(text) {
+          return String(text ?? "")
+            .replaceAll("&", "&amp;")
+            .replaceAll("<", "&lt;")
+            .replaceAll(">", "&gt;")
+            .replaceAll('"', "&quot;")
+            .replaceAll("'", "&#39;");
+        }
 
         function postToHost(type, payload) {
           try {
-            if (window.chrome && window.chrome.webview && typeof window.chrome.webview.postMessage === "function") {
-              window.chrome.webview.postMessage({ type, payload: payload || {} });
+            const webview = window.chrome && window.chrome.webview;
+            if (webview && typeof webview.postMessage === "function") {
+              webview.postMessage({ type, payload: payload || {} });
             }
           } catch (_) {}
         }
 
-        function forceBellVisible() {
-          const b = bellEl();
-          if (!b) return;
-          if (!document.body.classList.contains("beamer-open")) {
-            b.style.display = "grid";
-            b.style.visibility = "visible";
-            b.style.opacity = "1";
-            b.style.pointerEvents = "auto";
-          }
-        }
-
-        function isElementVisible(el) {
-          if (!el) return false;
-          const cs = window.getComputedStyle(el);
-          if (!cs) return false;
-          if (cs.display === "none" || cs.visibility === "hidden") return false;
-          if (Number(cs.opacity || "1") <= 0) return false;
-          if (cs.pointerEvents === "none") return false;
-          const rect = el.getBoundingClientRect();
-          if (rect.width <= 0 || rect.height <= 0) return false;
-          return true;
-        }
-
-        function widgetRootElements() {
-          return [
-            "#beamerOverlay",
-            "#beamerOverlayWrapper",
-            ".beamerOverlay",
-            ".beamer-overlay",
-            ".beamer-panel",
-            ".beamerPanel",
-            ".beamer-changelog",
-            ".beamerChangelog"
-          ];
-        }
-
-        function isWidgetOpenByDom() {
-          for (const sel of widgetRootElements()) {
-            const el = document.querySelector(sel);
-            if (isElementVisible(el)) return true;
-          }
-          return false;
-        }
-
-        function beamerReady() {
-          return typeof window.Beamer === "object" && typeof window.Beamer.show === "function";
-        }
-
-        function tryHideWidget() {
+        function formatDate(isoUtc) {
           try {
-            if (beamerReady() && typeof window.Beamer.hide === "function") window.Beamer.hide();
+            if (!isoUtc) return "";
+            const d = new Date(isoUtc);
+            if (Number.isNaN(d.getTime())) return "";
+            return d.toLocaleString();
+          } catch (_) {
+            return "";
+          }
+        }
+
+        function loadReadPostIds() {
+          try {
+            const raw = localStorage.getItem(READ_IDS_KEY);
+            if (!raw) return;
+            const items = JSON.parse(raw);
+            if (!Array.isArray(items)) return;
+            for (const item of items) {
+              const id = String(item || "").trim();
+              if (id) readPostIds.add(id);
+            }
           } catch (_) {}
         }
 
-        function enforceManualCloseIfNeeded(open) {
-          const dt = now() - lastManualCloseAt;
-          if (open && dt >= 0 && dt < manualCloseCooldownMs) {
-            tryHideWidget();
-            return false;
-          }
-          return open;
+        function saveReadPostIds() {
+          try {
+            localStorage.setItem(READ_IDS_KEY, JSON.stringify(Array.from(readPostIds)));
+          } catch (_) {}
         }
 
-        function syncOpenState() {
-          let open = isWidgetOpenByDom();
-          open = enforceManualCloseIfNeeded(open);
+        function getVisiblePosts() {
+          const posts = Array.isArray(state.posts) ? state.posts : [];
+          return posts.filter((post) => {
+            const key = getPostKey(post);
+            return !readPostIds.has(key);
+          });
+        }
 
-          if (open === lastOpen) {
-            if (!open) forceBellVisible();
+        function getPostKey(post) {
+          const id = String(post && post.id ? post.id : "").trim();
+          if (id) return id;
+
+          const title = String(post && post.title ? post.title : "").trim();
+          const dateUtc = String(post && post.dateUtc ? post.dateUtc : "").trim();
+          const content = String(post && post.content ? post.content : "").trim();
+          return `local:${title}|${dateUtc}|${content}`;
+        }
+
+        function markPostRead(postKey, beamerPostId) {
+          const key = String(postKey || "").trim();
+          if (!key) return;
+
+          if (!readPostIds.has(key)) {
+            readPostIds.add(key);
+            saveReadPostIds();
+          }
+
+          const id = String(beamerPostId || "").trim();
+          if (id) {
+            postToHost("mark_read", { id });
+          }
+
+          render();
+        }
+
+        function statusClass(status) {
+          if (status === "ok") return "ok";
+          if (status === "error" || status === "config_error") return "error";
+          return "warn";
+        }
+
+        function renderStatus() {
+          const statusEl = byId("status");
+          const dotEl = byId("titleDot");
+
+          const msg = state.message || "";
+          const syncText = state.lastSyncUtc ? `Last sync: ${formatDate(state.lastSyncUtc)}` : "Last sync: --";
+          const cfg = state.configPath ? `<div class=\"mono\">Config: ${htmlEscape(state.configPath)}</div>` : "";
+
+          statusEl.className = `status ${statusClass(state.status)}`;
+          if (state.status === "ok") {
+            statusEl.innerHTML = `<div>${htmlEscape(syncText)}</div>`;
+          } else {
+            statusEl.innerHTML = `
+              <div>${htmlEscape(msg)}</div>
+              <div>${htmlEscape(syncText)}</div>
+              ${cfg}
+            `;
+          }
+
+          if (state.status === "ok") {
+            dotEl.style.background = "var(--ok)";
+            dotEl.style.boxShadow = "0 0 0 6px #39d98a22";
+          } else if (state.status === "loading") {
+            dotEl.style.background = "var(--accent-2)";
+            dotEl.style.boxShadow = "0 0 0 6px #5be0ff22";
+          } else {
+            dotEl.style.background = "var(--danger)";
+            dotEl.style.boxShadow = "0 0 0 6px #ff7a7a22";
+          }
+        }
+
+        function renderFeed() {
+          const feed = byId("feed");
+          const posts = getVisiblePosts();
+          const newIds = new Set(Array.isArray(state.newPostIds) ? state.newPostIds.map(String) : []);
+
+          if (posts.length === 0) {
+            feed.innerHTML = `<div class=\"empty\">NO NEW POSTS</div>`;
             return;
           }
 
-          lastOpen = open;
-          document.body.classList.toggle("beamer-open", open);
-          if (!open) forceBellVisible();
+          const html = posts.map((post) => {
+            const id = String(post.id ?? "");
+            const postKey = getPostKey(post);
+            const title = htmlEscape(post.title || "Untitled post");
+            const category = htmlEscape(post.category || "Update");
+            const when = htmlEscape(formatDate(post.dateUtc));
+            const content = htmlEscape(post.content || "");
+            const newClass = newIds.has(id) ? "new" : "";
+            const markReadAction = `<div class=\"card-actions\"><button type=\"button\" class=\"link-btn mark-read-btn\" data-mark-read-key=\"${htmlEscape(postKey)}\" data-mark-read-id=\"${htmlEscape(id)}\">Mark as read</button></div>`;
+
+            return `
+              <article class=\"card ${newClass}\" data-id=\"${htmlEscape(id)}\">
+                <div class=\"card-head\">
+                  <h3 class=\"card-title\">${title}</h3>
+                </div>
+                <div class=\"card-meta\">
+                  <span class=\"badge\">${category}</span>
+                  <span class=\"time\">${when}</span>
+                </div>
+                <p class=\"content\">${content}</p>
+                ${markReadAction}
+              </article>
+            `;
+          }).join("");
+
+          feed.innerHTML = html;
         }
 
-        function scheduleSync(delayMs = 50) {
-          if (syncScheduled) return;
-          syncScheduled = true;
-          setTimeout(() => {
-            syncScheduled = false;
-            syncOpenState();
-          }, delayMs);
+        function renderMeta() {
+          byId("countPill").textContent = `Posts: ${getVisiblePosts().length}`;
         }
 
-        function markManualClose() {
-          lastManualCloseAt = now();
-          document.body.classList.remove("beamer-open");
-          lastOpen = false;
-          forceBellVisible();
-          scheduleSync(50);
-          scheduleSync(250);
-          scheduleSync(900);
+        function render() {
+          renderMeta();
+          renderStatus();
+          renderFeed();
         }
 
-        function clickIsInsideWidget(target) {
-          if (!target || !(target instanceof Element)) return false;
-          for (const sel of widgetRootElements()) {
-            const root = document.querySelector(sel);
-            if (root && root.contains(target)) return true;
-          }
-          return false;
+        function setState(next) {
+          if (!next || typeof next !== "object") return;
+
+          state.status = String(next.status || state.status || "loading");
+          state.message = String(next.message || "");
+          state.refreshMs = Number(next.refreshMs || state.refreshMs || 0);
+          state.lastSyncUtc = next.lastSyncUtc || state.lastSyncUtc;
+          state.configPath = String(next.configPath || state.configPath || "");
+          state.posts = Array.isArray(next.posts) ? next.posts : state.posts;
+          state.newPostIds = Array.isArray(next.newPostIds) ? next.newPostIds : [];
+
+          render();
         }
 
-        function isLikelyWidgetCloseButton(target) {
-          if (!target || !(target instanceof Element)) return false;
+        function bindEvents() {
+          document.addEventListener("click", (e) => {
+            const target = e.target;
+            if (!(target instanceof Element)) return;
 
-          const selectors = [
-            "button[aria-label='Close']",
-            "button[aria-label='close']",
-            "button[title='Close']",
-            "button[title='close']",
-            "button[aria-label='Dismiss']",
-            "button[aria-label='dismiss']",
-            ".beamer-close",
-            ".beamerClose",
-            ".beamer_close",
-            "[data-testid='close']",
-            "[data-test='close']",
-            "[data-action='close']"
-          ];
-
-          for (const sel of selectors) {
-            if (target.matches(sel)) return true;
-            const p = target.closest(sel);
-            if (p) return true;
-          }
-
-          const text = (target.textContent || "").trim().toLowerCase();
-          if (text === "close" || text === "×" || text === "x") return true;
-
-          return false;
-        }
-
-        const observer = new MutationObserver(() => scheduleSync(30));
-        observer.observe(document.documentElement, {
-          childList: true,
-          subtree: true,
-          attributes: true,
-          attributeFilter: ["class", "style", "hidden", "aria-hidden"]
-        });
-
-        document.addEventListener("visibilitychange", () => scheduleSync(30), true);
-
-        document.addEventListener("click", (e) => {
-          const t = e.target;
-          if (!clickIsInsideWidget(t)) return;
-          if (isLikelyWidgetCloseButton(t)) markManualClose();
-        }, true);
-
-        document.addEventListener("keydown", (e) => {
-          if (e.key !== "Escape") return;
-          if (isWidgetOpenByDom()) markManualClose();
-        }, true);
-
-        function pulseBell() {
-          if (!pulseOnNewMessage) return;
-          if (now() - lastPulseAt < pulseMinIntervalMs) return;
-          if (document.body.classList.contains("beamer-open")) return;
-
-          lastPulseAt = now();
-          const b = bellEl();
-          if (!b) return;
-
-          b.classList.remove("pulse");
-          void b.offsetWidth;
-          b.classList.add("pulse");
-          setTimeout(() => b.classList.remove("pulse"), 900);
-        }
-
-        function removeKnownBeamerDom() {
-          const scriptEls = Array.from(document.querySelectorAll("script[src]"))
-            .filter(s => (s.getAttribute("src") || "").includes("app.getbeamer.com/js/beamer-embed.js"));
-          for (const s of scriptEls) s.remove();
-
-          const knownSelectors = [
-            "#beamerOverlay",
-            "#beamerOverlayWrapper",
-            "#beamerBadge",
-            "#beamer-badge",
-            ".beamerOverlay",
-            ".beamer-overlay",
-            ".beamer-panel",
-            ".beamerPanel",
-            ".beamer-changelog",
-            ".beamerChangelog"
-          ];
-
-          for (const sel of knownSelectors) {
-            const nodes = Array.from(document.querySelectorAll(sel));
-            for (const n of nodes) n.remove();
-          }
-
-          const idPrefixNodes = Array.from(document.querySelectorAll("[id^='beamer']"));
-          for (const n of idPrefixNodes) {
-            const id = (n.getAttribute("id") || "").toLowerCase();
-            if (id === "beamershell" || id === "beamerroot") continue;
-            n.remove();
-          }
-
-          try { delete window.Beamer; } catch (_) { window.Beamer = undefined; }
-        }
-
-        function loadBeamerScript() {
-          return new Promise((resolve, reject) => {
-            const s = document.createElement("script");
-            s.src = BEAMER_SRC + "?t=" + now();
-            s.defer = true;
-            s.onload = () => resolve(true);
-            s.onerror = () => reject(new Error("beamer script failed"));
-            document.head.appendChild(s);
-          });
-        }
-
-        function waitForBeamerReady(timeoutMs = 8000, stepMs = 80) {
-          return new Promise((resolve) => {
-            const start = now();
-            const tick = () => {
-              if (beamerReady()) return resolve(true);
-              if (now() - start >= timeoutMs) return resolve(false);
-              setTimeout(tick, stepMs);
-            };
-            tick();
-          });
-        }
-
-        function tryShow(retries = 120, delayMs = 120) {
-          let n = 0;
-          const tick = () => {
-            n++;
-            try {
-              if (beamerReady()) {
-                window.Beamer.show();
-                return;
-              }
-            } catch (_) {}
-            if (n >= retries) return;
-            setTimeout(tick, delayMs);
-          };
-          tick();
-        }
-
-        function shouldReopenAfterRefresh(wasOpen) {
-          if (!wasOpen) return false;
-          const dt = now() - lastManualCloseAt;
-          if (dt >= 0 && dt < manualCloseCooldownMs) return false;
-          return true;
-        }
-
-        function readPossibleUnreadCount() {
-          try {
-            if (window.Beamer && typeof window.Beamer.unreadCount === "number") return window.Beamer.unreadCount;
-            if (window.Beamer && typeof window.Beamer.getUnreadCount === "function") {
-              const v = window.Beamer.getUnreadCount();
-              if (typeof v === "number") return v;
-            }
-            if (window.Beamer && typeof window.Beamer.hasUnread === "function") {
-              const v = window.Beamer.hasUnread();
-              if (v === true) return 1;
-              if (v === false) return 0;
-            }
-          } catch (_) {}
-          return null;
-        }
-
-        async function refreshBeamerPreserveState() {
-          if (refreshing) return;
-          refreshing = true;
-
-          try {
-            const wasOpen = isWidgetOpenByDom();
-            const beforeUnread = readPossibleUnreadCount();
-
-            tryHideWidget();
-            removeKnownBeamerDom();
-
-            try {
-              await loadBeamerScript();
-            } catch (_) {
-              scheduleSync(30);
+            const markRead = target.closest("[data-mark-read-key]");
+            if (markRead) {
+              const key = markRead.getAttribute("data-mark-read-key") || "";
+              const id = markRead.getAttribute("data-mark-read-id") || "";
+              if (key) markPostRead(key, id);
               return;
             }
 
-            const ok = await waitForBeamerReady();
-            scheduleSync(30);
+            const btn = target.closest("[data-open-url]");
+            if (!btn) return;
 
-            const afterUnread = readPossibleUnreadCount();
+            const url = btn.getAttribute("data-open-url") || "";
+            if (!url) return;
 
-            const hasNew =
-              (typeof beforeUnread === "number" && typeof afterUnread === "number" && afterUnread > beforeUnread) ||
-              (typeof beforeUnread !== "number" && typeof afterUnread === "number" && afterUnread > 0);
-
-            let delta = null;
-            if (typeof beforeUnread === "number" && typeof afterUnread === "number") delta = afterUnread - beforeUnread;
-
-            const dt = now() - lastManualCloseAt;
-            const inCooldown = dt >= 0 && dt < manualCloseCooldownMs;
-
-            const urgent =
-              (delta !== null && delta > 1) ||
-              inCooldown ||
-              (beforeUnread === null && typeof afterUnread === "number" && afterUnread > 0);
-
-            if (hasNew)
-            {
-              postToHost("new_message", { unread: afterUnread, delta });
-
-              if (urgent)
-              {
-                postToHost("urgent_message", {
-                  unread: afterUnread,
-                  delta,
-                  reason: (delta !== null && delta > 1) ? "batch" : (inCooldown ? "cooldown" : "unknown_to_known")
-                });
-
-                if (ok) {
-                  lastManualCloseAt = 0;
-                  tryShow();
-                }
-              }
-
-              if (!document.body.classList.contains("beamer-open")) pulseBell();
-            }
-
-            if (ok && shouldReopenAfterRefresh(wasOpen)) {
-              tryShow();
-            }
-          } finally {
-            refreshing = false;
-          }
-        }
-
-        window.__BV_FORCE_OPEN__ = function () {
-          lastManualCloseAt = 0;
-          tryShow();
-        };
-
-        window.__BV_BOOT__ = async function () {
-          if (booted) return;
-          booted = true;
-
-          const cfg = window.__BV_CFG__ || {};
-          const w = Number(cfg.widget_width || 520);
-          const refreshMs = Number(cfg.refresh_ms || 60000);
-          const autoOpen = !!cfg.auto_open_on_launch;
-
-          manualCloseCooldownMs = Number(cfg.manual_close_cooldown_ms ?? 6000);
-          if (!Number.isFinite(manualCloseCooldownMs) || manualCloseCooldownMs < 0) manualCloseCooldownMs = 6000;
-
-          pulseOnNewMessage = !!cfg.pulse_on_new_message;
-
-          pulseMinIntervalMs = Number(cfg.pulse_min_interval_ms ?? 15000);
-          if (!Number.isFinite(pulseMinIntervalMs) || pulseMinIntervalMs < 0) pulseMinIntervalMs = 15000;
-
-          document.documentElement.style.setProperty("--beamer-width", `${w}px`);
-
-          window.beamer_config = {
-            product_id: String(cfg.product_id || "vEjlRlWp82033"),
-            user_id: String(cfg.user_id || ("local-" + now())),
-            display: "right",
-            button: false,
-            alert: false,
-            callback: function () {
-              scheduleSync(30);
-              if (autoOpen) tryShow();
-            },
-            onerror: function () {
-              scheduleSync(30);
-            }
-          };
+            postToHost("open_external", { url });
+          });
 
           try {
-            await loadBeamerScript();
-            await waitForBeamerReady();
-          } catch (_) {
-            postToHost("boot_error", { reason: "beamer_script_load_failed" });
-            return;
-          }
+            const webview = window.chrome && window.chrome.webview;
+            if (webview && typeof webview.addEventListener === "function") {
+              webview.addEventListener("message", (event) => {
+                const msg = event && event.data ? event.data : null;
+                if (!msg || typeof msg !== "object") return;
+                if (msg.type === "state") {
+                  setState(msg.payload || {});
+                }
+              });
+            }
+          } catch (_) {}
+        }
 
-          forceBellVisible();
-          scheduleSync(30);
+        window.__BV_BOOT__ = function () {
+          if (booted) return;
+          booted = true;
+          loadReadPostIds();
 
-          const bell = bellEl();
-          if (bell) {
-            bell.addEventListener("click", () => {
-              lastManualCloseAt = 0;
-              tryShow();
-            });
-          }
+          const cfg = window.__BV_CFG__ || {};
+          state.refreshMs = Number(cfg.refresh_ms || 0);
+          state.configPath = String(cfg.config_path || "");
+          state.status = "loading";
+          state.message = "Connecting to Beamer API…";
 
-          if (autoOpen) tryShow();
-
-          if (refreshTimer) clearInterval(refreshTimer);
-          if (Number.isFinite(refreshMs) && refreshMs >= 15000) {
-            refreshTimer = setInterval(refreshBeamerPreserveState, refreshMs);
-          }
-
-          if (heartbeatTimer) clearInterval(heartbeatTimer);
-          heartbeatTimer = setInterval(() => {
-            forceBellVisible();
-            scheduleSync(30);
-          }, 2000);
+          bindEvents();
+          render();
+          postToHost("ui_ready", {});
         };
       })();
     </script>
