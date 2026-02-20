@@ -1,9 +1,11 @@
-<!-- FILE: Beamer_viewer.csproj -->
+<!-- FILE: SpiritsNotifications.csproj -->
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
+    <AssemblyName>SpiritsNotifications</AssemblyName>
+    <RootNamespace>SpiritsNotifications</RootNamespace>
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -13,6 +15,7 @@
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets/Spirits.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
@@ -21,7 +24,8 @@
 
   <ItemGroup>
     <EmbeddedResource Include="index.html" />
-    <EmbeddedResource Include="Beamerviewer.config.json" />
+    <EmbeddedResource Include="SpiritsNotifications.config.json" />
+    <Resource Include="Assets/Spirits.ico" />
     <Resource Include="Assets/app_icon.png" />
   </ItemGroup>
 

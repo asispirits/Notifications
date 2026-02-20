@@ -2,20 +2,20 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Beamer_viewer</title>
+    <title>Spirits Notifications</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       :root {
-        --bg-0: #071a2f;
-        --bg-1: #0a2442;
-        --panel: #102f53;
-        --panel-muted: #143b66;
-        --text-main: #e8f1ff;
-        --text-muted: #9bb8dc;
-        --accent: #2ed3a0;
-        --accent-2: #5be0ff;
-        --danger: #ff7a7a;
-        --ok: #39d98a;
+        --bg-0: #ffffff;
+        --bg-1: #ffffff;
+        --panel: #ffffff;
+        --panel-muted: #f4f9ff;
+        --text-main: #1a4e86;
+        --text-muted: #4b6f95;
+        --accent: #0000ff;
+        --accent-2: #80ffff;
+        --danger: #d43d3d;
+        --ok: #0000ff;
         --radius: 14px;
       }
 
@@ -31,10 +31,7 @@
       body {
         margin: 0;
         color: var(--text-main);
-        background:
-          radial-gradient(1200px 600px at -20% -10%, #1a4a7f55 0%, #00000000 60%),
-          radial-gradient(900px 500px at 120% 110%, #1bbf9f2b 0%, #00000000 60%),
-          linear-gradient(160deg, var(--bg-0), var(--bg-1));
+        background: var(--bg-0);
         font-family: "IBM Plex Sans", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
         overflow: hidden;
       }
@@ -47,9 +44,8 @@
 
       .top {
         padding: 16px 16px 10px;
-        border-bottom: 1px solid #25517f66;
-        background: linear-gradient(180deg, #0e2a4bcc 0%, #0e2a4b88 100%);
-        backdrop-filter: blur(8px);
+        border-bottom: 1px solid #c4d9ef;
+        background: linear-gradient(180deg, #ffffff 0%, #f5faff 100%);
       }
 
       .top-row {
@@ -72,7 +68,7 @@
         height: 10px;
         border-radius: 999px;
         background: var(--ok);
-        box-shadow: 0 0 0 6px #39d98a22;
+        box-shadow: 0 0 0 6px #0000ff22;
       }
 
       .meta {
@@ -84,10 +80,10 @@
       }
 
       .pill {
-        border: 1px solid #2a5988;
+        border: 1px solid #b5cae2;
         border-radius: 999px;
         padding: 4px 10px;
-        background: #0f3157;
+        background: #ffffff;
       }
 
       .status {
@@ -96,24 +92,24 @@
         padding: 10px 12px;
         font-size: 12px;
         line-height: 1.4;
-        border: 1px solid #2a5e91;
-        background: #11365e;
+        border: 1px solid #b7cee7;
+        background: #f4f9ff;
         color: var(--text-main);
       }
 
       .status.ok {
-        border-color: #1f7f5f;
-        background: #0e3a30;
+        border-color: #80ffff;
+        background: #eefeff;
       }
 
       .status.warn {
-        border-color: #7d5d2f;
-        background: #3f2e16;
+        border-color: #ffff80;
+        background: #fffef0;
       }
 
       .status.error {
-        border-color: #7f3131;
-        background: #3d1e1e;
+        border-color: #f0a8a8;
+        background: #fff2f2;
       }
 
       .feed {
@@ -130,23 +126,45 @@
         margin: 24px 6px 0;
         padding: 16px;
         border-radius: var(--radius);
-        border: 1px dashed #2f669a;
+        border: 1px dashed #80ffff;
         color: var(--text-muted);
         text-align: center;
-        background: #0f31534d;
+        background: #f6ffff;
       }
 
       .card {
-        border: 1px solid #4f95d3;
+        border: 1px solid #3f88c7;
         border-radius: var(--radius);
-        background: linear-gradient(180deg, #1a5b92 0%, #174a79 100%);
+        background: linear-gradient(180deg, #5ba9e6 0%, #458fcd 100%);
         padding: 12px;
-        box-shadow: 0 8px 26px #051b3166, inset 0 1px 0 #9dd5ff33;
+        box-shadow: 0 8px 20px #2a618f47, inset 0 1px 0 #bfe0f861;
       }
 
       .card.new {
-        border-color: #62cbff;
-        box-shadow: 0 0 0 1px #62cbff66, 0 10px 32px #0e3c66a8;
+        border-color: #6dc3ff;
+        background: linear-gradient(180deg, #6bbbf6 0%, #519fdd 100%);
+        box-shadow: 0 0 0 1px #9be1ff72, 0 10px 24px #3177b954;
+      }
+
+      .card.read {
+        border-color: #9ca9ba;
+        background: linear-gradient(180deg, #758499 0%, #657486 100%);
+        box-shadow: 0 6px 18px #4756673b, inset 0 1px 0 #d8e0e933;
+      }
+
+      .card.read .card-title,
+      .card.read .content {
+        color: #f2f7fc;
+      }
+
+      .card.read .time {
+        color: #dbe4ee;
+      }
+
+      .card.read .badge {
+        border-color: #c8d2de;
+        background: #8b99ab;
+        color: #f3f7fb;
       }
 
       .card-head {
@@ -162,6 +180,16 @@
         line-height: 1.3;
       }
 
+      .card:not(.read) .card-title,
+      .card:not(.read) .content {
+        color: #ffffff;
+        text-shadow: 0 1px 1px #255c879c;
+      }
+
+      .card:not(.read) .time {
+        color: #e8f5ff;
+      }
+
       .card-meta {
         margin-top: 6px;
         display: flex;
@@ -171,16 +199,16 @@
       }
 
       .badge {
-        border: 1px solid #63afea;
-        background: #1d5f97;
-        color: #e8f4ff;
+        border: 1px solid #6aa9db;
+        background: #2d74b2;
+        color: #f5fbff;
         border-radius: 999px;
         padding: 2px 8px;
         font-size: 11px;
       }
 
       .time {
-        color: var(--text-muted);
+        color: #2a5f94;
         font-size: 11px;
       }
 
@@ -189,7 +217,7 @@
         white-space: pre-wrap;
         font-size: 13px;
         line-height: 1.45;
-        color: #dfecff;
+        color: #1d4f82;
       }
 
       .card-actions {
@@ -199,9 +227,9 @@
       }
 
       .link-btn {
-        border: 1px solid #2d7cbb;
-        background: linear-gradient(180deg, #1a5e95, #174f80);
-        color: #ecf6ff;
+        border: 1px solid #8eb7df;
+        background: linear-gradient(180deg, #f7fbff, #ecf4ff);
+        color: #1a4e86;
         padding: 6px 10px;
         border-radius: 9px;
         font-size: 12px;
@@ -212,9 +240,28 @@
         filter: brightness(1.06);
       }
 
+      .link-btn:disabled {
+        cursor: default;
+        opacity: 0.72;
+        filter: none;
+      }
+
       .mark-read-btn {
-        border-color: #69b9ec;
-        background: linear-gradient(180deg, #2879b8, #1f6298);
+        border-color: #7aa8d0;
+        background: #f6fbff;
+        color: #1a4e86;
+        font-weight: 700;
+      }
+
+      .archive-toggle {
+        border-color: #7aa8d0;
+        font-weight: 700;
+      }
+
+      .archive-toggle.active {
+        border-color: #2b7fc1;
+        background: linear-gradient(180deg, #dff0ff, #c9e5ff);
+        color: #15426f;
       }
 
       .mono {
@@ -228,10 +275,11 @@
         <div class="top-row">
           <div class="title">
             <span class="title-dot" id="titleDot"></span>
-            <span>Beamer Viewer</span>
+            <span>Spirits Notifications</span>
           </div>
           <div class="meta">
             <span class="pill" id="countPill">Posts: --</span>
+            <button type="button" class="link-btn archive-toggle" id="archiveBtn" hidden>ARCHIVED MESSAGES</button>
           </div>
         </div>
       </div>
@@ -244,7 +292,8 @@
     <script>
       (function () {
         let booted = false;
-        const READ_IDS_KEY = "bv_read_post_ids_v1";
+        const READ_IDS_KEY_NON_ARCHIVE = "bv_read_post_ids_non_archive_v2";
+        const READ_IDS_KEY_ARCHIVE = "bv_read_post_ids_archive_v2";
 
         const state = {
           status: "loading",
@@ -253,9 +302,16 @@
           lastSyncUtc: null,
           configPath: "",
           posts: [],
-          newPostIds: []
+          newPostIds: [],
+          archiveEnabled: false,
+          archivedMessages: [],
+          showArchived: false
         };
         const readPostIds = new Set();
+
+        function getReadIdsStorageKey() {
+          return state.archiveEnabled ? READ_IDS_KEY_ARCHIVE : READ_IDS_KEY_NON_ARCHIVE;
+        }
 
         function byId(id) {
           return document.getElementById(id);
@@ -292,7 +348,8 @@
 
         function loadReadPostIds() {
           try {
-            const raw = localStorage.getItem(READ_IDS_KEY);
+            readPostIds.clear();
+            const raw = localStorage.getItem(getReadIdsStorageKey());
             if (!raw) return;
             const items = JSON.parse(raw);
             if (!Array.isArray(items)) return;
@@ -305,15 +362,29 @@
 
         function saveReadPostIds() {
           try {
-            localStorage.setItem(READ_IDS_KEY, JSON.stringify(Array.from(readPostIds)));
+            localStorage.setItem(getReadIdsStorageKey(), JSON.stringify(Array.from(readPostIds)));
           } catch (_) {}
         }
 
         function getVisiblePosts() {
-          const posts = Array.isArray(state.posts) ? state.posts : [];
-          return posts.filter((post) => {
-            const key = getPostKey(post);
-            return !readPostIds.has(key);
+          if (state.showArchived) {
+            return Array.isArray(state.archivedMessages) ? state.archivedMessages : [];
+          }
+
+          const livePosts = Array.isArray(state.posts) ? state.posts : [];
+          if (!state.archiveEnabled) {
+            return livePosts;
+          }
+
+          const archivedKeys = new Set(
+            (Array.isArray(state.archivedMessages) ? state.archivedMessages : [])
+              .map((item) => String(item && item.sourcePostKey ? item.sourcePostKey : "").trim())
+              .filter(Boolean)
+          );
+
+          return livePosts.filter((post) => {
+            const postKey = getPostKey(post);
+            return !readPostIds.has(postKey) && !archivedKeys.has(postKey);
           });
         }
 
@@ -323,23 +394,48 @@
 
           const title = String(post && post.title ? post.title : "").trim();
           const dateUtc = String(post && post.dateUtc ? post.dateUtc : "").trim();
+          const postUrl = String(post && post.postUrl ? post.postUrl : "").trim();
+          const linkUrl = String(post && post.linkUrl ? post.linkUrl : "").trim();
           const content = String(post && post.content ? post.content : "").trim();
+          if (postUrl || linkUrl) {
+            return `local:${title}|${dateUtc}|${postUrl}|${linkUrl}|${content}`;
+          }
           return `local:${title}|${dateUtc}|${content}`;
         }
 
-        function markPostRead(postKey, beamerPostId) {
+        function findPostByKey(postKey) {
+          const key = String(postKey || "").trim();
+          if (!key) return null;
+
+          const posts = Array.isArray(state.posts) ? state.posts : [];
+          for (const post of posts) {
+            if (getPostKey(post) === key) return post;
+          }
+
+          return null;
+        }
+
+        function markPostRead(postKey) {
           const key = String(postKey || "").trim();
           if (!key) return;
 
-          if (!readPostIds.has(key)) {
-            readPostIds.add(key);
-            saveReadPostIds();
-          }
+          if (readPostIds.has(key)) return;
 
-          const id = String(beamerPostId || "").trim();
-          if (id) {
-            postToHost("mark_read", { id });
-          }
+          readPostIds.add(key);
+          saveReadPostIds();
+
+          const post = findPostByKey(key);
+          postToHost("mark_read", {
+            id: String(post && post.id ? post.id : "").trim(),
+            postKey: key,
+            title: String(post && post.title ? post.title : "").trim(),
+            content: String(post && post.content ? post.content : "").trim(),
+            category: String(post && post.category ? post.category : "").trim(),
+            dateUtc: String(post && post.dateUtc ? post.dateUtc : "").trim(),
+            postUrl: String(post && post.postUrl ? post.postUrl : "").trim(),
+            linkUrl: String(post && post.linkUrl ? post.linkUrl : "").trim(),
+            linkText: String(post && post.linkText ? post.linkText : "").trim()
+          });
 
           render();
         }
@@ -384,6 +480,39 @@
         function renderFeed() {
           const feed = byId("feed");
           const posts = getVisiblePosts();
+
+          if (state.showArchived) {
+            if (posts.length === 0) {
+              feed.innerHTML = `<div class=\"empty\">NO ARCHIVED MESSAGES</div>`;
+              return;
+            }
+
+            const archiveHtml = posts.map((post) => {
+              const title = htmlEscape(post.title || "Untitled post");
+              const category = htmlEscape(post.category || "Update");
+              const originalWhen = htmlEscape(formatDate(post.dateUtc) || "--");
+              const ackWhen = htmlEscape(formatDate(post.ackUtc) || "--");
+              const content = htmlEscape(post.content || "");
+
+              return `
+                <article class=\"card read\">
+                  <div class=\"card-head\">
+                    <h3 class=\"card-title\">${title}</h3>
+                  </div>
+                  <div class=\"card-meta\">
+                    <span class=\"badge\">${category}</span>
+                    <span class=\"time\">Posted: ${originalWhen}</span>
+                    <span class=\"time\">Read: ${ackWhen}</span>
+                  </div>
+                  <p class=\"content\">${content}</p>
+                </article>
+              `;
+            }).join("");
+
+            feed.innerHTML = archiveHtml;
+            return;
+          }
+
           const newIds = new Set(Array.isArray(state.newPostIds) ? state.newPostIds.map(String) : []);
 
           if (posts.length === 0) {
@@ -398,11 +527,15 @@
             const category = htmlEscape(post.category || "Update");
             const when = htmlEscape(formatDate(post.dateUtc));
             const content = htmlEscape(post.content || "");
-            const newClass = newIds.has(id) ? "new" : "";
-            const markReadAction = `<div class=\"card-actions\"><button type=\"button\" class=\"link-btn mark-read-btn\" data-mark-read-key=\"${htmlEscape(postKey)}\" data-mark-read-id=\"${htmlEscape(id)}\">Mark as read</button></div>`;
+            const isRead = readPostIds.has(postKey);
+            const newClass = !isRead && newIds.has(id) ? "new" : "";
+            const readClass = isRead ? "read" : "";
+            const markReadAction = isRead
+              ? ""
+              : `<div class=\"card-actions\"><button type=\"button\" class=\"link-btn mark-read-btn\" data-mark-read-key=\"${htmlEscape(postKey)}\">OK</button></div>`;
 
             return `
-              <article class=\"card ${newClass}\" data-id=\"${htmlEscape(id)}\">
+              <article class=\"card ${newClass} ${readClass}\" data-id=\"${htmlEscape(id)}\">
                 <div class=\"card-head\">
                   <h3 class=\"card-title\">${title}</h3>
                 </div>
@@ -420,7 +553,15 @@
         }
 
         function renderMeta() {
-          byId("countPill").textContent = `Posts: ${getVisiblePosts().length}`;
+          const visibleCount = getVisiblePosts().length;
+          byId("countPill").textContent = state.showArchived ? `Archived: ${visibleCount}` : `Posts: ${visibleCount}`;
+
+          const archiveBtn = byId("archiveBtn");
+          if (archiveBtn) {
+            archiveBtn.hidden = !state.archiveEnabled;
+            archiveBtn.classList.toggle("active", state.showArchived);
+            archiveBtn.setAttribute("aria-pressed", state.showArchived ? "true" : "false");
+          }
         }
 
         function render() {
@@ -443,6 +584,25 @@
           render();
         }
 
+        function setArchiveState(next) {
+          if (!next || typeof next !== "object") return;
+
+          const previousEnabled = state.archiveEnabled;
+          state.archiveEnabled = Boolean(next.enabled);
+          state.archivedMessages = Array.isArray(next.messages) ? next.messages : [];
+
+          if (previousEnabled !== state.archiveEnabled) {
+            loadReadPostIds();
+          }
+
+          if (!state.archiveEnabled) {
+            state.showArchived = false;
+            state.archivedMessages = [];
+          }
+
+          render();
+        }
+
         function bindEvents() {
           document.addEventListener("click", (e) => {
             const target = e.target;
@@ -451,8 +611,15 @@
             const markRead = target.closest("[data-mark-read-key]");
             if (markRead) {
               const key = markRead.getAttribute("data-mark-read-key") || "";
-              const id = markRead.getAttribute("data-mark-read-id") || "";
-              if (key) markPostRead(key, id);
+              if (key) markPostRead(key);
+              return;
+            }
+
+            const archiveBtn = target.closest("#archiveBtn");
+            if (archiveBtn) {
+              if (!state.archiveEnabled) return;
+              state.showArchived = !state.showArchived;
+              render();
               return;
             }
 
@@ -473,6 +640,11 @@
                 if (!msg || typeof msg !== "object") return;
                 if (msg.type === "state") {
                   setState(msg.payload || {});
+                  return;
+                }
+
+                if (msg.type === "archive_state") {
+                  setArchiveState(msg.payload || {});
                 }
               });
             }
@@ -482,11 +654,16 @@
         window.__BV_BOOT__ = function () {
           if (booted) return;
           booted = true;
-          loadReadPostIds();
 
           const cfg = window.__BV_CFG__ || {};
           state.refreshMs = Number(cfg.refresh_ms || 0);
           state.configPath = String(cfg.config_path || "");
+          state.archiveEnabled = Boolean(cfg.archive_messages);
+          loadReadPostIds();
+          if (!state.archiveEnabled) {
+            state.showArchived = false;
+            state.archivedMessages = [];
+          }
           state.status = "loading";
           state.message = "Connecting to Beamer API…";
 

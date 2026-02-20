@@ -1,4 +1,4 @@
-namespace Beamer_viewer;
+namespace SpiritsNotifications;
 
 public partial class App
 {

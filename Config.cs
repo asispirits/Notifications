@@ -4,7 +4,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text.Json;
 
-namespace Beamer_viewer;
+namespace SpiritsNotifications;
 
 public sealed class AppConfig
 {
@@ -29,13 +29,19 @@ public sealed class AppConfig
   public int UrgentFocusUnreadDelta { get; set; } = 3;
   public long FocusStealCooldownMs { get; set; } = 45_000;
   public bool EnableViewTracking { get; set; } = true;
+  public bool ArchiveMessages { get; set; } = true;
 
-  public static readonly string FileName = "beamerviewer.config.json";
+  public static readonly string FileName = "SpiritsNotifications.config.json";
+  public static readonly string LegacyFileName = "Beamerviewer.config.json";
 
   public static (AppConfig Config, string Path) LoadOrCreate()
   {
     var preferred = Path.Combine(AppContext.BaseDirectory, FileName);
     if (TryLoad(preferred, out var cfg)) return (Normalize(cfg!), preferred);
+
+    var legacyPreferred = Path.Combine(AppContext.BaseDirectory, LegacyFileName);
+    if (TryLoadLegacy(preferred, legacyPreferred, out cfg, out var migratedPath))
+      return (Normalize(cfg!), migratedPath);
 
     if (TryExtractEmbeddedTemplate(preferred) && TryLoad(preferred, out cfg))
       return (Normalize(cfg!), preferred);
@@ -44,12 +50,26 @@ public sealed class AppConfig
 
     var fallbackDir = Path.Combine(
       Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-      "Beamer_viewer"
+      "SpiritsNotifications"
     );
     Directory.CreateDirectory(fallbackDir);
 
     var fallback = Path.Combine(fallbackDir, FileName);
     if (TryLoad(fallback, out cfg)) return (Normalize(cfg!), fallback);
+
+    var legacyFallback = Path.Combine(fallbackDir, LegacyFileName);
+    if (TryLoadLegacy(fallback, legacyFallback, out cfg, out migratedPath))
+      return (Normalize(cfg!), migratedPath);
+
+    var legacyFallbackDir = Path.Combine(
+      Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+      "Beamer_viewer"
+    );
+    Directory.CreateDirectory(legacyFallbackDir);
+
+    var legacyOldAppPath = Path.Combine(legacyFallbackDir, LegacyFileName);
+    if (TryLoadLegacy(fallback, legacyOldAppPath, out cfg, out migratedPath))
+      return (Normalize(cfg!), migratedPath);
 
     if (TryExtractEmbeddedTemplate(fallback) && TryLoad(fallback, out cfg))
       return (Normalize(cfg!), fallback);
@@ -118,13 +138,49 @@ public sealed class AppConfig
     try
     {
       cfg = Normalize(new AppConfig());
+      return TrySave(path, cfg);
+    }
+    catch
+    {
+      cfg = Normalize(new AppConfig());
+      return false;
+    }
+  }
+
+  private static bool TryLoadLegacy(string targetPath, string legacyPath, out AppConfig? cfg, out string resolvedPath)
+  {
+    resolvedPath = targetPath;
+    cfg = null;
+
+    if (!TryLoad(legacyPath, out cfg)) return false;
+    cfg = Normalize(cfg!);
+
+    if (TrySave(targetPath, cfg))
+    {
+      resolvedPath = targetPath;
+      return true;
+    }
+
+    resolvedPath = legacyPath;
+    return true;
+  }
+
+  private static bool TrySave(string path, AppConfig cfg)
+  {
+    try
+    {
+      var dir = Path.GetDirectoryName(path);
+      if (!string.IsNullOrWhiteSpace(dir))
+      {
+        Directory.CreateDirectory(dir);
+      }
+
       var json = JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true });
       File.WriteAllText(path, json);
       return true;
     }
     catch
     {
-      cfg = Normalize(new AppConfig());
       return false;
     }
   }

@@ -8,6 +8,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -18,13 +19,15 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using Microsoft.Web.WebView2.Core;
 
-namespace Beamer_viewer;
+namespace SpiritsNotifications;
 
 public partial class MainWindow
 {
-  private const string HostName = "beamerviewer.local";
-  private const string AppFolderName = "Beamer_viewer_app";
+  private const string HostName = "spiritsnotifications.local";
+  private const string AppFolderName = "SpiritsNotifications_app";
   private const string BeamerTrackBaseUrl = "https://backend.getbeamer.com/track";
+  private const string CHeaderDbfPath = @"C:\TEMP\cheader.dbf";
+  private const string ArchiveFolderName = "MESSAGE_ARCHIVE";
 
   private readonly AppConfig _cfg;
   private readonly string _cfgPath;
@@ -42,6 +45,11 @@ public partial class MainWindow
   private CancellationTokenSource? _pollCts;
   private string? _lastStateEnvelopeJson;
   private readonly object _stateLock = new();
+  private string? _lastArchiveEnvelopeJson;
+  private readonly object _archiveLock = new();
+  private readonly string _archiveFolderPath;
+  private readonly bool _archiveMessagesEnabled;
+  private List<ArchivedMessage> _archivedMessages = new();
 
   private string _lastFingerprint = "";
   private HashSet<string> _knownPostIds = new(StringComparer.Ordinal);
@@ -115,11 +123,30 @@ public partial class MainWindow
   {
     InitializeComponent();
     (_cfg, _cfgPath) = AppConfig.LoadOrCreate();
+    _archiveMessagesEnabled = _cfg.ArchiveMessages;
+    _archiveFolderPath = Path.Combine(AppContext.BaseDirectory, ArchiveFolderName);
+    if (_archiveMessagesEnabled)
+    {
+      try
+      {
+        Directory.CreateDirectory(_archiveFolderPath);
+      }
+      catch (Exception ex)
+      {
+        Debug.WriteLine($"Unable to create archive folder at startup: {ex}");
+      }
+
+      _archivedMessages = LoadArchivedMessagesFromDisk();
+      CacheArchiveStateEnvelope();
+    }
+
+    TryLoadCHeaderIdentity(out var cHeaderName, out var cHeaderUserId);
+
     var viewerUserIdSeed = string.IsNullOrWhiteSpace(_cfg.ViewerUserId)
-      ? Environment.UserName
+      ? (string.IsNullOrWhiteSpace(cHeaderUserId) ? Environment.UserName : cHeaderUserId)
       : _cfg.ViewerUserId;
     var viewerNameSeed = string.IsNullOrWhiteSpace(_cfg.ViewerName)
-      ? Environment.MachineName
+      ? (string.IsNullOrWhiteSpace(cHeaderName) ? Environment.MachineName : cHeaderName)
       : _cfg.ViewerName;
 
     _viewerUserId = NormalizeIdentity(viewerUserIdSeed, "local-user");
@@ -198,6 +225,46 @@ public partial class MainWindow
     public HttpStatusCode? StatusCode { get; init; }
   }
 
+  private readonly struct DbfField
+  {
+    public DbfField(string name, int length)
+    {
+      Name = name;
+      Length = length;
+    }
+
+    public string Name { get; }
+    public int Length { get; }
+  }
+
+  private sealed class MarkReadMessage
+  {
+    public string PostId { get; init; } = "";
+    public string PostKey { get; init; } = "";
+    public string Title { get; init; } = "";
+    public string Content { get; init; } = "";
+    public string Category { get; init; } = "Update";
+    public string? DateUtc { get; init; }
+    public string? PostUrl { get; init; }
+    public string? LinkUrl { get; init; }
+    public string? LinkText { get; init; }
+  }
+
+  private sealed class ArchivedMessage
+  {
+    public string ArchiveId { get; set; } = "";
+    public string SourcePostId { get; set; } = "";
+    public string SourcePostKey { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string Content { get; set; } = "";
+    public string Category { get; set; } = "Update";
+    public string? DateUtc { get; set; }
+    public string? PostUrl { get; set; }
+    public string? LinkUrl { get; set; }
+    public string? LinkText { get; set; }
+    public string AckUtc { get; set; } = "";
+  }
+
   private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
   {
     if (!_allowClose)
@@ -268,7 +335,7 @@ public partial class MainWindow
     {
       var fallback = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "Beamer_viewer",
+        "SpiritsNotifications",
         AppFolderName
       );
       Directory.CreateDirectory(fallback);
@@ -351,6 +418,7 @@ public partial class MainWindow
       if (type == "ui_ready")
       {
         SendCachedStateToUi();
+        SendCachedArchiveStateToUi();
         return;
       }
 
@@ -368,16 +436,41 @@ public partial class MainWindow
       {
         if (!doc.RootElement.TryGetProperty("payload", out var payload)) return;
         if (payload.ValueKind != JsonValueKind.Object) return;
-        if (!payload.TryGetProperty("id", out var idProp)) return;
 
-        var id = (idProp.GetString() ?? "").Trim();
-        if (string.IsNullOrWhiteSpace(id)) return;
+        var markRead = new MarkReadMessage
+        {
+          PostId = ReadJsonMessageString(payload, "id"),
+          PostKey = ReadJsonMessageString(payload, "postKey"),
+          Title = ReadJsonMessageString(payload, "title"),
+          Content = ReadJsonMessageString(payload, "content"),
+          Category = ReadJsonMessageString(payload, "category"),
+          DateUtc = ReadJsonMessageString(payload, "dateUtc"),
+          PostUrl = ReadJsonMessageString(payload, "postUrl"),
+          LinkUrl = ReadJsonMessageString(payload, "linkUrl"),
+          LinkText = ReadJsonMessageString(payload, "linkText")
+        };
+
+        if (string.IsNullOrWhiteSpace(markRead.PostId) &&
+            string.IsNullOrWhiteSpace(markRead.PostKey) &&
+            string.IsNullOrWhiteSpace(markRead.Title) &&
+            string.IsNullOrWhiteSpace(markRead.Content))
+        {
+          return;
+        }
 
         _ = Task.Run(async () =>
         {
           try
           {
-            await TrackPostViewsAsync(new[] { id }, CancellationToken.None);
+            if (!string.IsNullOrWhiteSpace(markRead.PostId))
+            {
+              await TrackPostViewsAsync(new[] { markRead.PostId }, CancellationToken.None);
+            }
+
+            if (_archiveMessagesEnabled && TryArchiveAcknowledgedMessage(markRead))
+            {
+              await PublishArchiveStateAsync();
+            }
           }
           catch
           {
@@ -468,7 +561,7 @@ public partial class MainWindow
       await PublishStateAsync(new UiState
       {
         Status = "config_error",
-        Message = "Missing ApiKey. Add your private Beamer API key in Beamerviewer.config.json and restart.",
+        Message = "Missing ApiKey. Add your private Beamer API key in SpiritsNotifications.config.json and restart.",
         RefreshMs = refreshMs,
         ConfigPath = _cfgPath,
         LastSyncUtc = null,
@@ -978,6 +1071,119 @@ public partial class MainWindow
     }
   }
 
+  private static bool TryLoadCHeaderIdentity(out string viewerName, out string viewerUserId)
+  {
+    viewerName = "";
+    viewerUserId = "";
+
+    if (!File.Exists(CHeaderDbfPath)) return false;
+
+    try
+    {
+      using var fs = new FileStream(CHeaderDbfPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+      using var br = new BinaryReader(fs, Encoding.ASCII, leaveOpen: true);
+
+      if (fs.Length < 33) return false;
+
+      fs.Seek(4, SeekOrigin.Begin);
+      var recordCount = br.ReadInt32();
+      var headerLength = br.ReadUInt16();
+      var recordLength = br.ReadUInt16();
+
+      if (recordCount <= 0 || headerLength < 33 || recordLength < 2) return false;
+      if (headerLength > fs.Length) return false;
+
+      fs.Seek(32, SeekOrigin.Begin);
+      var fields = new List<DbfField>();
+
+      while (fs.Position < headerLength)
+      {
+        var descriptor = br.ReadBytes(32);
+        if (descriptor.Length == 0) break;
+        if (descriptor[0] == 0x0D) break;
+        if (descriptor.Length < 32) return false;
+
+        var fieldName = Encoding.ASCII
+          .GetString(descriptor, 0, 11)
+          .TrimEnd('\0', ' ');
+
+        if (string.IsNullOrWhiteSpace(fieldName)) continue;
+
+        var fieldLength = descriptor[16];
+        fields.Add(new DbfField(fieldName, fieldLength));
+      }
+
+      if (fields.Count == 0) return false;
+
+      var hasCName = TryGetDbfFieldLayout(fields, "Cname", out var cnameOffset, out var cnameLength);
+      var hasCThisReg = TryGetDbfFieldLayout(fields, "Cthisreg", out var cthisregOffset, out var cthisregLength);
+      if (!hasCName && !hasCThisReg) return false;
+
+      var recordsStart = headerLength;
+      for (var i = 0; i < recordCount; i++)
+      {
+        var pos = recordsStart + ((long)i * recordLength);
+        if (pos + recordLength > fs.Length) break;
+
+        fs.Seek(pos, SeekOrigin.Begin);
+        var record = br.ReadBytes(recordLength);
+        if (record.Length < recordLength) break;
+
+        if (record[0] == (byte)'*') continue;
+
+        if (hasCName)
+        {
+          viewerName = ReadDbfFieldValue(record, cnameOffset, cnameLength);
+        }
+
+        if (hasCThisReg)
+        {
+          viewerUserId = ReadDbfFieldValue(record, cthisregOffset, cthisregLength);
+        }
+
+        return !string.IsNullOrWhiteSpace(viewerName) || !string.IsNullOrWhiteSpace(viewerUserId);
+      }
+    }
+    catch
+    {
+    }
+
+    return false;
+  }
+
+  private static bool TryGetDbfFieldLayout(IReadOnlyList<DbfField> fields, string targetFieldName, out int offset, out int length)
+  {
+    offset = 1; // first byte in record is deletion flag
+    length = 0;
+
+    foreach (var field in fields)
+    {
+      if (string.Equals(field.Name, targetFieldName, StringComparison.OrdinalIgnoreCase))
+      {
+        length = field.Length;
+        return length > 0;
+      }
+
+      offset += field.Length;
+    }
+
+    offset = 0;
+    return false;
+  }
+
+  private static string ReadDbfFieldValue(byte[] record, int offset, int length)
+  {
+    if (offset <= 0 || length <= 0 || offset >= record.Length) return "";
+
+    var safeLength = Math.Min(length, record.Length - offset);
+    if (safeLength <= 0) return "";
+
+    return Encoding.Latin1
+      .GetString(record, offset, safeLength)
+      .Trim()
+      .Trim('\0');
+  }
+
   private static string NormalizeIdentity(string? value, string fallback)
   {
     var v = (value ?? "").Trim();
@@ -1049,6 +1255,235 @@ public partial class MainWindow
     catch
     {
     }
+  }
+
+  private async Task PublishArchiveStateAsync()
+  {
+    if (!_archiveMessagesEnabled) return;
+
+    string envelopeJson;
+    lock (_archiveLock)
+    {
+      var snapshot = _archivedMessages
+        .OrderByDescending(m => m.AckUtc)
+        .ToList();
+      envelopeJson = BuildArchiveStateEnvelopeJson(snapshot);
+      _lastArchiveEnvelopeJson = envelopeJson;
+    }
+
+    await Dispatcher.InvokeAsync(() =>
+    {
+      try
+      {
+        if (Web.CoreWebView2 is null) return;
+        Web.CoreWebView2.PostWebMessageAsJson(envelopeJson);
+      }
+      catch
+      {
+      }
+    });
+  }
+
+  private void SendCachedArchiveStateToUi()
+  {
+    if (!_archiveMessagesEnabled) return;
+
+    string envelope;
+    lock (_archiveLock)
+    {
+      if (string.IsNullOrWhiteSpace(_lastArchiveEnvelopeJson))
+      {
+        var snapshot = _archivedMessages
+          .OrderByDescending(m => m.AckUtc)
+          .ToList();
+        _lastArchiveEnvelopeJson = BuildArchiveStateEnvelopeJson(snapshot);
+      }
+
+      envelope = _lastArchiveEnvelopeJson!;
+    }
+
+    try
+    {
+      Web.CoreWebView2?.PostWebMessageAsJson(envelope);
+    }
+    catch
+    {
+    }
+  }
+
+  private void CacheArchiveStateEnvelope()
+  {
+    if (!_archiveMessagesEnabled) return;
+
+    lock (_archiveLock)
+    {
+      var snapshot = _archivedMessages
+        .OrderByDescending(m => m.AckUtc)
+        .ToList();
+      _lastArchiveEnvelopeJson = BuildArchiveStateEnvelopeJson(snapshot);
+    }
+  }
+
+  private string BuildArchiveStateEnvelopeJson(IReadOnlyList<ArchivedMessage> messages)
+  {
+    return JsonSerializer.Serialize(new
+    {
+      type = "archive_state",
+      payload = new
+      {
+        enabled = _archiveMessagesEnabled,
+        messages
+      }
+    }, _jsonOptions);
+  }
+
+  private List<ArchivedMessage> LoadArchivedMessagesFromDisk()
+  {
+    var archived = new List<ArchivedMessage>();
+
+    try
+    {
+      if (!Directory.Exists(_archiveFolderPath)) return archived;
+
+      foreach (var file in Directory.EnumerateFiles(_archiveFolderPath, "*.json", SearchOption.TopDirectoryOnly))
+      {
+        try
+        {
+          var raw = File.ReadAllText(file);
+          var item = JsonSerializer.Deserialize<ArchivedMessage>(raw, new JsonSerializerOptions
+          {
+            PropertyNameCaseInsensitive = true
+          });
+
+          if (item is null) continue;
+          if (string.IsNullOrWhiteSpace(item.SourcePostKey))
+          {
+            item.SourcePostKey = !string.IsNullOrWhiteSpace(item.SourcePostId)
+              ? item.SourcePostId
+              : item.ArchiveId;
+          }
+          if (string.IsNullOrWhiteSpace(item.AckUtc))
+          {
+            item.AckUtc = DateTimeOffset.UtcNow.ToString("O");
+          }
+
+          archived.Add(item);
+        }
+        catch
+        {
+        }
+      }
+    }
+    catch
+    {
+    }
+
+    return archived
+      .OrderByDescending(m => m.AckUtc)
+      .ToList();
+  }
+
+  private bool TryArchiveAcknowledgedMessage(MarkReadMessage message)
+  {
+    if (!_archiveMessagesEnabled) return false;
+
+    var sourceKey = BuildArchiveSourceKey(message);
+    if (string.IsNullOrWhiteSpace(sourceKey)) return false;
+
+    lock (_archiveLock)
+    {
+      if (_archivedMessages.Any(m => string.Equals(m.SourcePostKey, sourceKey, StringComparison.Ordinal)))
+      {
+        return false;
+      }
+    }
+
+    try
+    {
+      Directory.CreateDirectory(_archiveFolderPath);
+    }
+    catch
+    {
+      return false;
+    }
+
+    var nowUtc = DateTimeOffset.UtcNow;
+    var archive = new ArchivedMessage
+    {
+      ArchiveId = Guid.NewGuid().ToString("N"),
+      SourcePostId = (message.PostId ?? "").Trim(),
+      SourcePostKey = sourceKey,
+      Title = (message.Title ?? "").Trim(),
+      Content = (message.Content ?? "").Trim(),
+      Category = string.IsNullOrWhiteSpace(message.Category) ? "Update" : message.Category.Trim(),
+      DateUtc = string.IsNullOrWhiteSpace(message.DateUtc) ? null : message.DateUtc.Trim(),
+      PostUrl = string.IsNullOrWhiteSpace(message.PostUrl) ? null : message.PostUrl.Trim(),
+      LinkUrl = string.IsNullOrWhiteSpace(message.LinkUrl) ? null : message.LinkUrl.Trim(),
+      LinkText = string.IsNullOrWhiteSpace(message.LinkText) ? null : message.LinkText.Trim(),
+      AckUtc = nowUtc.ToString("O")
+    };
+
+    var fileHint = !string.IsNullOrWhiteSpace(archive.SourcePostId)
+      ? archive.SourcePostId
+      : sourceKey;
+    fileHint = SanitizeFileNamePart(fileHint);
+    if (string.IsNullOrWhiteSpace(fileHint))
+    {
+      fileHint = archive.ArchiveId;
+    }
+
+    var filePath = Path.Combine(_archiveFolderPath, $"{nowUtc:yyyyMMdd_HHmmss_fff}_{fileHint}.json");
+
+    try
+    {
+      var json = JsonSerializer.Serialize(archive, new JsonSerializerOptions
+      {
+        WriteIndented = true
+      });
+      File.WriteAllText(filePath, json);
+    }
+    catch
+    {
+      return false;
+    }
+
+    lock (_archiveLock)
+    {
+      _archivedMessages.Add(archive);
+      _archivedMessages = _archivedMessages
+        .OrderByDescending(m => m.AckUtc)
+        .ToList();
+      _lastArchiveEnvelopeJson = BuildArchiveStateEnvelopeJson(_archivedMessages);
+    }
+
+    return true;
+  }
+
+  private static string BuildArchiveSourceKey(MarkReadMessage message)
+  {
+    if (!string.IsNullOrWhiteSpace(message.PostKey))
+      return message.PostKey.Trim();
+
+    if (!string.IsNullOrWhiteSpace(message.PostId))
+      return message.PostId.Trim();
+
+    var title = (message.Title ?? "").Trim();
+    var dateUtc = (message.DateUtc ?? "").Trim();
+    var content = (message.Content ?? "").Trim();
+    var composed = $"local:{title}|{dateUtc}|{content}";
+    return composed.Trim();
+  }
+
+  private static string SanitizeFileNamePart(string value)
+  {
+    var invalidChars = Path.GetInvalidFileNameChars().ToHashSet();
+    var cleaned = new string(value
+      .Where(ch => !invalidChars.Contains(ch))
+      .ToArray());
+
+    cleaned = cleaned.Trim();
+    if (cleaned.Length > 80) cleaned = cleaned[..80];
+    return cleaned;
   }
 
   private static List<UiPost> ParsePosts(string rawJson)
@@ -1202,6 +1637,20 @@ public partial class MainWindow
       JsonValueKind.True => "true",
       JsonValueKind.False => "false",
       _ => null
+    };
+  }
+
+  private static string ReadJsonMessageString(JsonElement obj, string propertyName)
+  {
+    if (!obj.TryGetProperty(propertyName, out var value)) return "";
+
+    return value.ValueKind switch
+    {
+      JsonValueKind.String => value.GetString() ?? "",
+      JsonValueKind.Number => value.GetRawText(),
+      JsonValueKind.True => "true",
+      JsonValueKind.False => "false",
+      _ => ""
     };
   }
 
@@ -1387,6 +1836,7 @@ public partial class MainWindow
     {
       refresh_ms = _cfg.RefreshMs,
       max_posts = _cfg.MaxPosts,
+      archive_messages = _archiveMessagesEnabled,
       config_path = _cfgPath
     };
 

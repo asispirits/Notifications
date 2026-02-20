@@ -17,5 +17,6 @@
   "ForceForegroundOnUrgent": false,
   "UrgentFocusUnreadDelta": 3,
   "FocusStealCooldownMs": 45000,
-  "EnableViewTracking": true
+  "EnableViewTracking": true,
+  "ArchiveMessages": true
 }
