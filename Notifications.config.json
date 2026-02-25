@@ -18,5 +18,20 @@
   "UrgentFocusUnreadDelta": 3,
   "FocusStealCooldownMs": 45000,
   "EnableViewTracking": true,
-  "ArchiveMessages": true
+  "Ui": {
+    "EnableSecretMenu": false,
+    "AppTitle": "Notifications",
+    "HeaderTitle": "Notifications",
+    "ThemePageBackground": "#ffffff",
+    "ThemeHeaderStart": "#ffffff",
+    "ThemeHeaderEnd": "#f5faff",
+    "ThemeTextMain": "#1a4e86",
+    "ThemeTextMuted": "#4b6f95",
+    "ThemeAccent": "#0000ff",
+    "ThemeAccentSoft": "#80ffff",
+    "ThemeUnreadStart": "#6bbbf6",
+    "ThemeUnreadEnd": "#519fdd",
+    "ThemeReadStart": "#758499",
+    "ThemeReadEnd": "#657486"
+  }
 }

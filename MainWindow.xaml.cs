@@ -19,13 +19,14 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using Microsoft.Web.WebView2.Core;
 
-namespace SpiritsNotifications;
+namespace Notifications;
 
 public partial class MainWindow
 {
-  private const string HostName = "spiritsnotifications.local";
-  private const string AppFolderName = "SpiritsNotifications_app";
+  private const string HostName = "notifications.local";
+  private const string AppFolderName = "Notifications_app";
   private const string BeamerTrackBaseUrl = "https://backend.getbeamer.com/track";
+  private const string BeamerTrackViewsBaseUrl = "https://app.getbeamer.com/trackViews";
   private const string CHeaderDbfPath = @"C:\TEMP\cheader.dbf";
   private const string ArchiveFolderName = "MESSAGE_ARCHIVE";
 
@@ -62,10 +63,40 @@ public partial class MainWindow
   private readonly string _viewerFirstName;
   private readonly string _viewerLastName;
   private readonly string _viewerEmail;
+  private readonly string _beamerVisitorUserId;
   private readonly ConcurrentDictionary<string, byte> _trackedViewPostIds = new(StringComparer.Ordinal);
+  private DateTimeOffset _publicDescriptionCacheAt = DateTimeOffset.MinValue;
+  private Dictionary<string, string> _publicDescriptionByTitle = new(StringComparer.Ordinal);
+  private Dictionary<string, string> _publicDescriptionBySlug = new(StringComparer.Ordinal);
+  private readonly SemaphoreSlim _publicDescriptionCacheGate = new(1, 1);
 
   private static readonly Regex HtmlTagRegex = new("<.*?>", RegexOptions.Compiled | RegexOptions.Singleline);
+  private static readonly string[] TrackIdPropertyNames =
+  {
+    "descriptionId",
+    "description_id",
+    "id",
+    "postId",
+    "post_id",
+    "announcementId",
+    "announcement_id",
+    "featureId",
+    "feature_id",
+    "changelogId",
+    "changelog_id",
+    "notificationId",
+    "notification_id",
+    "_id"
+  };
+  private static readonly Regex PublicDescriptionRegex = new(
+    "data-description-id=\"(?<id>\\d+)\"[^>]*data-post-title=\"(?<title>[^\"]*)\"",
+    RegexOptions.Compiled | RegexOptions.IgnoreCase);
+  private static readonly Regex HrefRegex = new(
+    "href=\"(?<href>https://app\\.getbeamer\\.com/[^\"]+)\"",
+    RegexOptions.Compiled | RegexOptions.IgnoreCase);
+  private static readonly Regex HexColorRegex = new("^#[0-9a-fA-F]{6}$", RegexOptions.Compiled);
   private static readonly TimeSpan PostFetchFallbackInterval = TimeSpan.FromMinutes(3);
+  private static readonly TimeSpan PublicDescriptionCacheTtl = TimeSpan.FromMinutes(2);
 
   private const int WM_CLOSE = 0x0010;
   private const int WM_SYSCOMMAND = 0x0112;
@@ -123,22 +154,20 @@ public partial class MainWindow
   {
     InitializeComponent();
     (_cfg, _cfgPath) = AppConfig.LoadOrCreate();
-    _archiveMessagesEnabled = _cfg.ArchiveMessages;
+    Title = _cfg.UiAppTitle;
+    _archiveMessagesEnabled = true;
     _archiveFolderPath = Path.Combine(AppContext.BaseDirectory, ArchiveFolderName);
-    if (_archiveMessagesEnabled)
+    try
     {
-      try
-      {
-        Directory.CreateDirectory(_archiveFolderPath);
-      }
-      catch (Exception ex)
-      {
-        Debug.WriteLine($"Unable to create archive folder at startup: {ex}");
-      }
-
-      _archivedMessages = LoadArchivedMessagesFromDisk();
-      CacheArchiveStateEnvelope();
+      Directory.CreateDirectory(_archiveFolderPath);
     }
+    catch (Exception ex)
+    {
+      Debug.WriteLine($"Unable to create archive folder at startup: {ex}");
+    }
+
+    _archivedMessages = LoadArchivedMessagesFromDisk();
+    CacheArchiveStateEnvelope();
 
     TryLoadCHeaderIdentity(out var cHeaderName, out var cHeaderUserId);
 
@@ -153,6 +182,7 @@ public partial class MainWindow
     _viewerFirstName = NormalizeIdentity(viewerNameSeed, _viewerUserId);
     _viewerLastName = "";
     _viewerEmail = NormalizeOptionalIdentity(_cfg.ViewerEmail, 254);
+    _beamerVisitorUserId = ResolveBeamerVisitorUserId(_cfg.UserId);
 
     _http.Timeout = TimeSpan.FromMilliseconds(_cfg.RequestTimeoutMs);
     _http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
@@ -188,6 +218,8 @@ public partial class MainWindow
   private sealed class UiPost
   {
     public string Id { get; init; } = "";
+    public string? Code { get; init; }
+    public List<string> TrackIdCandidates { get; init; } = new();
     public string Title { get; init; } = "";
     public string Content { get; init; } = "";
     public string Category { get; init; } = "Update";
@@ -240,6 +272,9 @@ public partial class MainWindow
   private sealed class MarkReadMessage
   {
     public string PostId { get; init; } = "";
+    public string Code { get; init; } = "";
+    public bool BeaconTracked { get; init; }
+    public List<string> TrackIds { get; init; } = new();
     public string PostKey { get; init; } = "";
     public string Title { get; init; } = "";
     public string Content { get; init; } = "";
@@ -250,10 +285,29 @@ public partial class MainWindow
     public string? LinkText { get; init; }
   }
 
+  private sealed class SaveUiSettingsMessage
+  {
+    public string AppTitle { get; init; } = "";
+    public string HeaderTitle { get; init; } = "";
+    public string ThemePageBackground { get; init; } = "";
+    public string ThemeHeaderStart { get; init; } = "";
+    public string ThemeHeaderEnd { get; init; } = "";
+    public string ThemeTextMain { get; init; } = "";
+    public string ThemeTextMuted { get; init; } = "";
+    public string ThemeAccent { get; init; } = "";
+    public string ThemeAccentSoft { get; init; } = "";
+    public string ThemeUnreadStart { get; init; } = "";
+    public string ThemeUnreadEnd { get; init; } = "";
+    public string ThemeReadStart { get; init; } = "";
+    public string ThemeReadEnd { get; init; } = "";
+    public bool DisableSecretMenuAfterSave { get; init; }
+  }
+
   private sealed class ArchivedMessage
   {
     public string ArchiveId { get; set; } = "";
     public string SourcePostId { get; set; } = "";
+    public string? SourcePostCode { get; set; }
     public string SourcePostKey { get; set; } = "";
     public string Title { get; set; } = "";
     public string Content { get; set; } = "";
@@ -335,7 +389,7 @@ public partial class MainWindow
     {
       var fallback = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "SpiritsNotifications",
+        "Notifications",
         AppFolderName
       );
       Directory.CreateDirectory(fallback);
@@ -419,6 +473,7 @@ public partial class MainWindow
       {
         SendCachedStateToUi();
         SendCachedArchiveStateToUi();
+        _ = PublishUiConfigAsync();
         return;
       }
 
@@ -440,6 +495,9 @@ public partial class MainWindow
         var markRead = new MarkReadMessage
         {
           PostId = ReadJsonMessageString(payload, "id"),
+          Code = ReadJsonMessageString(payload, "code"),
+          BeaconTracked = ReadBool(payload, "beaconTracked") ?? false,
+          TrackIds = ReadJsonStringArray(payload, "trackIds"),
           PostKey = ReadJsonMessageString(payload, "postKey"),
           Title = ReadJsonMessageString(payload, "title"),
           Content = ReadJsonMessageString(payload, "content"),
@@ -462,9 +520,37 @@ public partial class MainWindow
         {
           try
           {
+            var trackIdCandidates = new List<string>();
+            if (markRead.TrackIds.Count > 0)
+            {
+              trackIdCandidates.AddRange(markRead.TrackIds);
+            }
             if (!string.IsNullOrWhiteSpace(markRead.PostId))
             {
-              await TrackPostViewsAsync(new[] { markRead.PostId }, CancellationToken.None);
+              trackIdCandidates.Add(markRead.PostId);
+            }
+            if (!string.IsNullOrWhiteSpace(markRead.PostKey) &&
+                !markRead.PostKey.StartsWith("local:", StringComparison.OrdinalIgnoreCase))
+            {
+              trackIdCandidates.Add(markRead.PostKey);
+            }
+            if (!string.IsNullOrWhiteSpace(markRead.Code))
+            {
+              trackIdCandidates.Add(markRead.Code);
+            }
+
+            if (!trackIdCandidates.Any(LooksNumeric))
+            {
+              var resolvedDescriptionId = await ResolveDescriptionIdAsync(markRead, CancellationToken.None);
+              if (!string.IsNullOrWhiteSpace(resolvedDescriptionId))
+              {
+                trackIdCandidates.Insert(0, resolvedDescriptionId);
+              }
+            }
+
+            if (trackIdCandidates.Count > 0)
+            {
+              await TrackPostViewsAsync(trackIdCandidates, CancellationToken.None);
             }
 
             if (_archiveMessagesEnabled && TryArchiveAcknowledgedMessage(markRead))
@@ -476,6 +562,33 @@ public partial class MainWindow
           {
           }
         });
+        return;
+      }
+
+      if (type == "save_ui_settings")
+      {
+        if (!doc.RootElement.TryGetProperty("payload", out var payload)) return;
+        if (payload.ValueKind != JsonValueKind.Object) return;
+
+        var settings = new SaveUiSettingsMessage
+        {
+          AppTitle = ReadJsonMessageString(payload, "appTitle"),
+          HeaderTitle = ReadJsonMessageString(payload, "headerTitle"),
+          ThemePageBackground = ReadJsonMessageString(payload, "themePageBackground"),
+          ThemeHeaderStart = ReadJsonMessageString(payload, "themeHeaderStart"),
+          ThemeHeaderEnd = ReadJsonMessageString(payload, "themeHeaderEnd"),
+          ThemeTextMain = ReadJsonMessageString(payload, "themeTextMain"),
+          ThemeTextMuted = ReadJsonMessageString(payload, "themeTextMuted"),
+          ThemeAccent = ReadJsonMessageString(payload, "themeAccent"),
+          ThemeAccentSoft = ReadJsonMessageString(payload, "themeAccentSoft"),
+          ThemeUnreadStart = ReadJsonMessageString(payload, "themeUnreadStart"),
+          ThemeUnreadEnd = ReadJsonMessageString(payload, "themeUnreadEnd"),
+          ThemeReadStart = ReadJsonMessageString(payload, "themeReadStart"),
+          ThemeReadEnd = ReadJsonMessageString(payload, "themeReadEnd"),
+          DisableSecretMenuAfterSave = ReadBool(payload, "disableSecretMenuAfterSave") ?? false
+        };
+
+        _ = Task.Run(() => SaveUiSettingsAsync(settings));
       }
     }
     catch
@@ -561,7 +674,7 @@ public partial class MainWindow
       await PublishStateAsync(new UiState
       {
         Status = "config_error",
-        Message = "Missing ApiKey. Add your private Beamer API key in SpiritsNotifications.config.json and restart.",
+        Message = "Missing ApiKey. Add your private Beamer API key in the config file and restart.",
         RefreshMs = refreshMs,
         ConfigPath = _cfgPath,
         LastSyncUtc = null,
@@ -631,6 +744,8 @@ public partial class MainWindow
       .Take(_cfg.MaxPosts)
       .ToList();
 
+    var archiveUpdated = await ArchivePostsAsync(posts);
+
     _latestPosts = posts;
 
     var fingerprint = BuildFingerprint(posts);
@@ -660,11 +775,10 @@ public partial class MainWindow
 
     if (hasNew)
     {
-      var delta = Math.Max(1, newPostIds.Count);
       await Dispatcher.InvokeAsync(() =>
       {
-        var force = ShouldForceForegroundForUrgent(delta);
-        BringToFront(force);
+        // Always foreground the app when a new message arrives.
+        BringToFront(force: true);
       });
     }
 
@@ -684,6 +798,11 @@ public partial class MainWindow
       Posts = posts,
       NewPostIds = hasNew ? newPostIds : new List<string>()
     });
+
+    if (archiveUpdated)
+    {
+      await PublishArchiveStateAsync();
+    }
   }
 
   private async Task<FetchResult> FetchPostsAsync(CancellationToken token)
@@ -986,88 +1105,309 @@ public partial class MainWindow
     return new Uri($"{path}?{string.Join("&", query)}");
   }
 
-  private async Task TrackPostViewsAsync(IEnumerable<string> postIds, CancellationToken token)
+  private async Task<bool> TrackPostViewsAsync(IEnumerable<string> postIds, CancellationToken token)
   {
-    if (!_cfg.EnableViewTracking) return;
-    if (string.IsNullOrWhiteSpace(_cfg.ProductId)) return;
+    if (!_cfg.EnableViewTracking) return false;
+    if (string.IsNullOrWhiteSpace(_cfg.ProductId)) return false;
+
+    var trackedAny = false;
 
     foreach (var postId in postIds
       .Where(id => !string.IsNullOrWhiteSpace(id))
       .Select(id => id.Trim())
       .Distinct(StringComparer.Ordinal))
     {
-      if (!_trackedViewPostIds.TryAdd(postId, 0)) continue;
+      if (!_trackedViewPostIds.TryAdd(postId, 0))
+      {
+        trackedAny = true;
+        continue;
+      }
 
       var tracked = await TrackSinglePostViewAsync(postId, token);
+      if (tracked)
+      {
+        trackedAny = true;
+      }
       if (!tracked)
       {
         _trackedViewPostIds.TryRemove(postId, out _);
       }
     }
+
+    return trackedAny;
   }
 
   private async Task<bool> TrackSinglePostViewAsync(string postId, CancellationToken token)
   {
     try
     {
-      using var req = new HttpRequestMessage(HttpMethod.Post, BuildTrackUri(postId));
-      using var resp = await _http.SendAsync(req, token);
-      return resp.IsSuccessStatusCode;
+      if (LooksNumeric(postId))
+      {
+        var trackViewsUri = BuildTrackViewsUri(postId);
+        using var trackViewsReq = new HttpRequestMessage(HttpMethod.Post, trackViewsUri)
+        {
+          Content = new ByteArrayContent(Array.Empty<byte>())
+        };
+        trackViewsReq.Headers.Accept.Clear();
+        trackViewsReq.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("*/*"));
+        using var trackViewsResp = await _http.SendAsync(trackViewsReq, token);
+        if (trackViewsResp.IsSuccessStatusCode) return true;
+
+        var trackViewsBody = await trackViewsResp.Content.ReadAsStringAsync(token);
+        Debug.WriteLine($"Track view app trackViews POST failed for post {postId}: {(int)trackViewsResp.StatusCode} {ExtractMessage(trackViewsBody)}");
+      }
+
+      var trackParams = BuildTrackParameters(postId);
+      var queryTrackUri = BuildTrackUri(trackParams);
+
+      // Keep this endpoint aligned with the 2/20 behavior that was known-good.
+      using var queryPostReq = new HttpRequestMessage(HttpMethod.Post, queryTrackUri);
+      queryPostReq.Headers.Accept.Clear();
+      queryPostReq.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("*/*"));
+      using var queryPostResp = await _http.SendAsync(queryPostReq, token);
+      if (queryPostResp.IsSuccessStatusCode) return true;
+
+      var queryPostBody = await queryPostResp.Content.ReadAsStringAsync(token);
+      Debug.WriteLine($"Track view query POST failed for post {postId}: {(int)queryPostResp.StatusCode} {ExtractMessage(queryPostBody)}");
+      return false;
     }
     catch (OperationCanceledException)
     {
       throw;
     }
-    catch
+    catch (Exception ex)
     {
+      Debug.WriteLine($"Track view exception for post {postId}: {ex.Message}");
       return false;
     }
   }
 
-  private Uri BuildTrackUri(string postId)
+  private List<KeyValuePair<string, string>> BuildTrackParameters(string postId)
+  {
+    var query = new List<KeyValuePair<string, string>>
+    {
+      new("product", _cfg.ProductId),
+      new("id", postId)
+    };
+
+    AppendViewerIdentityParameters(query);
+
+    return query;
+  }
+
+  private Uri BuildTrackViewsUri(string descriptionId)
   {
     var query = new List<string>
     {
-      $"product={Uri.EscapeDataString(_cfg.ProductId)}",
-      $"id={Uri.EscapeDataString(postId)}"
+      $"app_id={Uri.EscapeDataString(_cfg.ProductId)}",
+      $"descriptionId={Uri.EscapeDataString(descriptionId)}"
     };
 
-    AppendViewerIdentityQuery(query);
-
-    return new Uri($"{BeamerTrackBaseUrl}?{string.Join("&", query)}");
-  }
-
-  private void AppendViewerIdentityQuery(List<string> query)
-  {
     if (!string.IsNullOrWhiteSpace(_viewerUserId))
     {
       query.Add($"user_id={Uri.EscapeDataString(_viewerUserId)}");
       query.Add($"custom_user_id={Uri.EscapeDataString(_viewerUserId)}");
-      query.Add($"userId={Uri.EscapeDataString(_viewerUserId)}");
-      query.Add($"customUserId={Uri.EscapeDataString(_viewerUserId)}");
     }
 
     if (!string.IsNullOrWhiteSpace(_viewerFirstName))
     {
-      query.Add($"user_firstname={Uri.EscapeDataString(_viewerFirstName)}");
       query.Add($"firstname={Uri.EscapeDataString(_viewerFirstName)}");
-      query.Add($"userFirstName={Uri.EscapeDataString(_viewerFirstName)}");
-      query.Add($"firstName={Uri.EscapeDataString(_viewerFirstName)}");
     }
 
     if (!string.IsNullOrWhiteSpace(_viewerLastName))
     {
-      query.Add($"user_lastname={Uri.EscapeDataString(_viewerLastName)}");
       query.Add($"lastname={Uri.EscapeDataString(_viewerLastName)}");
-      query.Add($"userLastName={Uri.EscapeDataString(_viewerLastName)}");
-      query.Add($"lastName={Uri.EscapeDataString(_viewerLastName)}");
     }
 
     if (!string.IsNullOrWhiteSpace(_viewerEmail))
     {
-      query.Add($"user_email={Uri.EscapeDataString(_viewerEmail)}");
       query.Add($"email={Uri.EscapeDataString(_viewerEmail)}");
-      query.Add($"userEmail={Uri.EscapeDataString(_viewerEmail)}");
+    }
+
+    return new Uri($"{BeamerTrackViewsBaseUrl}?{string.Join("&", query)}");
+  }
+
+  private async Task<string?> ResolveDescriptionIdAsync(MarkReadMessage markRead, CancellationToken token)
+  {
+    if (string.IsNullOrWhiteSpace(_cfg.ProductId)) return null;
+
+    var slug = ExtractSlug(markRead.PostUrl);
+    var titleKey = NormalizeLookupKey(markRead.Title);
+
+    await EnsurePublicDescriptionCacheAsync(token);
+
+    if (!string.IsNullOrWhiteSpace(slug) &&
+        _publicDescriptionBySlug.TryGetValue(slug, out var bySlug) &&
+        LooksNumeric(bySlug))
+    {
+      return bySlug;
+    }
+
+    if (!string.IsNullOrWhiteSpace(titleKey) &&
+        _publicDescriptionByTitle.TryGetValue(titleKey, out var byTitle) &&
+        LooksNumeric(byTitle))
+    {
+      return byTitle;
+    }
+
+    return null;
+  }
+
+  private async Task EnsurePublicDescriptionCacheAsync(CancellationToken token)
+  {
+    if (string.IsNullOrWhiteSpace(_cfg.ProductId)) return;
+    if ((DateTimeOffset.UtcNow - _publicDescriptionCacheAt) < PublicDescriptionCacheTtl) return;
+
+    await _publicDescriptionCacheGate.WaitAsync(token);
+    try
+    {
+      if ((DateTimeOffset.UtcNow - _publicDescriptionCacheAt) < PublicDescriptionCacheTtl) return;
+
+      var uri = $"https://app.getbeamer.com/loadMoreNews?app_id={Uri.EscapeDataString(_cfg.ProductId)}";
+      using var req = new HttpRequestMessage(HttpMethod.Get, uri);
+      using var resp = await _http.SendAsync(req, token);
+      if (!resp.IsSuccessStatusCode)
+      {
+        _publicDescriptionCacheAt = DateTimeOffset.UtcNow;
+        return;
+      }
+
+      var html = await resp.Content.ReadAsStringAsync(token);
+      var byTitle = new Dictionary<string, string>(StringComparer.Ordinal);
+      var bySlug = new Dictionary<string, string>(StringComparer.Ordinal);
+
+      var matches = PublicDescriptionRegex.Matches(html);
+      for (var i = 0; i < matches.Count; i++)
+      {
+        var match = matches[i];
+        var id = (match.Groups["id"].Value ?? "").Trim();
+        if (!LooksNumeric(id)) continue;
+
+        var titleRaw = WebUtility.HtmlDecode(match.Groups["title"].Value ?? "");
+        var titleKey = NormalizeLookupKey(titleRaw);
+        if (!string.IsNullOrWhiteSpace(titleKey))
+        {
+          byTitle[titleKey] = id;
+        }
+
+        var nextIndex = i + 1 < matches.Count ? matches[i + 1].Index : html.Length;
+        var segmentLength = Math.Max(0, nextIndex - match.Index);
+        if (segmentLength > 0)
+        {
+          var segment = html.Substring(match.Index, segmentLength);
+          var hrefMatch = HrefRegex.Match(segment);
+          if (hrefMatch.Success)
+          {
+            var slug = ExtractSlug(hrefMatch.Groups["href"].Value);
+            if (!string.IsNullOrWhiteSpace(slug))
+            {
+              bySlug[slug] = id;
+            }
+          }
+        }
+      }
+
+      _publicDescriptionByTitle = byTitle;
+      _publicDescriptionBySlug = bySlug;
+      _publicDescriptionCacheAt = DateTimeOffset.UtcNow;
+    }
+    catch (Exception ex)
+    {
+      Debug.WriteLine($"Failed to refresh public description cache: {ex.Message}");
+      _publicDescriptionCacheAt = DateTimeOffset.UtcNow;
+    }
+    finally
+    {
+      _publicDescriptionCacheGate.Release();
+    }
+  }
+
+  private static string NormalizeLookupKey(string? value)
+  {
+    var v = (value ?? "").Trim();
+    if (string.IsNullOrWhiteSpace(v)) return "";
+    v = Regex.Replace(v, "\\s+", " ");
+    return v.ToLowerInvariant();
+  }
+
+  private static string ExtractSlug(string? url)
+  {
+    var raw = (url ?? "").Trim();
+    if (string.IsNullOrWhiteSpace(raw)) return "";
+
+    if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri))
+    {
+      return "";
+    }
+
+    var segment = uri.Segments.LastOrDefault() ?? "";
+    return segment.Trim('/').ToLowerInvariant();
+  }
+
+  private static bool LooksNumeric(string value)
+  {
+    if (string.IsNullOrWhiteSpace(value)) return false;
+    foreach (var ch in value.Trim())
+    {
+      if (!char.IsDigit(ch)) return false;
+    }
+    return true;
+  }
+
+  private static Uri BuildTrackUri(IReadOnlyList<KeyValuePair<string, string>> queryParams)
+  {
+    var query = string.Join("&", queryParams.Select(p =>
+      $"{Uri.EscapeDataString(p.Key)}={Uri.EscapeDataString(p.Value ?? "")}"));
+
+    if (string.IsNullOrWhiteSpace(query))
+    {
+      return new Uri(BeamerTrackBaseUrl);
+    }
+
+    return new Uri($"{BeamerTrackBaseUrl}?{query}");
+  }
+
+  private void AppendViewerIdentityParameters(List<KeyValuePair<string, string>> queryParams)
+  {
+    if (!string.IsNullOrWhiteSpace(_viewerUserId))
+    {
+      queryParams.Add(new KeyValuePair<string, string>("user_id", _viewerUserId));
+      queryParams.Add(new KeyValuePair<string, string>("custom_user_id", _viewerUserId));
+      queryParams.Add(new KeyValuePair<string, string>("userId", _viewerUserId));
+      queryParams.Add(new KeyValuePair<string, string>("customUserId", _viewerUserId));
+    }
+
+    if (!string.IsNullOrWhiteSpace(_viewerFirstName))
+    {
+      queryParams.Add(new KeyValuePair<string, string>("user_firstname", _viewerFirstName));
+      queryParams.Add(new KeyValuePair<string, string>("firstname", _viewerFirstName));
+      queryParams.Add(new KeyValuePair<string, string>("userFirstName", _viewerFirstName));
+      queryParams.Add(new KeyValuePair<string, string>("firstName", _viewerFirstName));
+    }
+
+    if (!string.IsNullOrWhiteSpace(_viewerLastName))
+    {
+      queryParams.Add(new KeyValuePair<string, string>("user_lastname", _viewerLastName));
+      queryParams.Add(new KeyValuePair<string, string>("lastname", _viewerLastName));
+      queryParams.Add(new KeyValuePair<string, string>("userLastName", _viewerLastName));
+      queryParams.Add(new KeyValuePair<string, string>("lastName", _viewerLastName));
+    }
+
+    if (!string.IsNullOrWhiteSpace(_viewerEmail))
+    {
+      queryParams.Add(new KeyValuePair<string, string>("user_email", _viewerEmail));
+      queryParams.Add(new KeyValuePair<string, string>("email", _viewerEmail));
+      queryParams.Add(new KeyValuePair<string, string>("userEmail", _viewerEmail));
+    }
+  }
+
+  private void AppendViewerIdentityQuery(List<string> query)
+  {
+    var identityPairs = new List<KeyValuePair<string, string>>();
+    AppendViewerIdentityParameters(identityPairs);
+    foreach (var pair in identityPairs)
+    {
+      query.Add($"{Uri.EscapeDataString(pair.Key)}={Uri.EscapeDataString(pair.Value ?? "")}");
     }
   }
 
@@ -1198,6 +1538,20 @@ public partial class MainWindow
     return v.Length <= maxLength ? v : v[..maxLength];
   }
 
+  private static string ResolveBeamerVisitorUserId(string? configuredUserId)
+  {
+    var raw = (configuredUserId ?? "").Trim();
+    if (Guid.TryParse(raw, out var directGuid)) return directGuid.ToString("D");
+
+    if (raw.StartsWith("local-", StringComparison.OrdinalIgnoreCase))
+    {
+      var suffix = raw["local-".Length..].Trim();
+      if (Guid.TryParse(suffix, out var localGuid)) return localGuid.ToString("D");
+    }
+
+    return Guid.NewGuid().ToString("D");
+  }
+
   private static string BuildFingerprint(IReadOnlyList<UiPost> posts)
   {
     if (posts.Count == 0) return "empty";
@@ -1210,6 +1564,20 @@ public partial class MainWindow
       top.Title ?? "",
       top.Content ?? ""
     });
+  }
+
+  private static string NormalizeUiTitle(string? value, string fallback)
+  {
+    var v = (value ?? "").Trim();
+    if (string.IsNullOrWhiteSpace(v)) return fallback;
+    return v.Length <= 80 ? v : v[..80];
+  }
+
+  private static string NormalizeUiColor(string? value, string fallback)
+  {
+    var v = (value ?? "").Trim();
+    if (!HexColorRegex.IsMatch(v)) return fallback;
+    return v.ToLowerInvariant();
   }
 
   private async Task PublishStateAsync(UiState state)
@@ -1331,10 +1699,100 @@ public partial class MainWindow
       type = "archive_state",
       payload = new
       {
-        enabled = _archiveMessagesEnabled,
         messages
       }
     }, _jsonOptions);
+  }
+
+  private object BuildUiConfigPayload()
+  {
+    return new
+    {
+      enable_secret_menu = _cfg.EnableSecretMenu,
+      ui_app_title = _cfg.UiAppTitle,
+      ui_header_title = _cfg.UiHeaderTitle,
+      theme_page_background = _cfg.ThemePageBackground,
+      theme_header_start = _cfg.ThemeHeaderStart,
+      theme_header_end = _cfg.ThemeHeaderEnd,
+      theme_text_main = _cfg.ThemeTextMain,
+      theme_text_muted = _cfg.ThemeTextMuted,
+      theme_accent = _cfg.ThemeAccent,
+      theme_accent_soft = _cfg.ThemeAccentSoft,
+      theme_unread_start = _cfg.ThemeUnreadStart,
+      theme_unread_end = _cfg.ThemeUnreadEnd,
+      theme_read_start = _cfg.ThemeReadStart,
+      theme_read_end = _cfg.ThemeReadEnd
+    };
+  }
+
+  private async Task PublishUiConfigAsync()
+  {
+    await SendToUiAsync("ui_config", BuildUiConfigPayload());
+  }
+
+  private async Task SaveUiSettingsAsync(SaveUiSettingsMessage settings)
+  {
+    var fallbackAppTitle = NormalizeUiTitle(_cfg.UiAppTitle, "Notifications");
+    var nextAppTitle = NormalizeUiTitle(settings.AppTitle, fallbackAppTitle);
+    _cfg.UiAppTitle = nextAppTitle;
+    _cfg.UiHeaderTitle = NormalizeUiTitle(settings.HeaderTitle, nextAppTitle);
+    _cfg.ThemePageBackground = NormalizeUiColor(settings.ThemePageBackground, _cfg.ThemePageBackground);
+    _cfg.ThemeHeaderStart = NormalizeUiColor(settings.ThemeHeaderStart, _cfg.ThemeHeaderStart);
+    _cfg.ThemeHeaderEnd = NormalizeUiColor(settings.ThemeHeaderEnd, _cfg.ThemeHeaderEnd);
+    _cfg.ThemeTextMain = NormalizeUiColor(settings.ThemeTextMain, _cfg.ThemeTextMain);
+    _cfg.ThemeTextMuted = NormalizeUiColor(settings.ThemeTextMuted, _cfg.ThemeTextMuted);
+    _cfg.ThemeAccent = NormalizeUiColor(settings.ThemeAccent, _cfg.ThemeAccent);
+    _cfg.ThemeAccentSoft = NormalizeUiColor(settings.ThemeAccentSoft, _cfg.ThemeAccentSoft);
+    _cfg.ThemeUnreadStart = NormalizeUiColor(settings.ThemeUnreadStart, _cfg.ThemeUnreadStart);
+    _cfg.ThemeUnreadEnd = NormalizeUiColor(settings.ThemeUnreadEnd, _cfg.ThemeUnreadEnd);
+    _cfg.ThemeReadStart = NormalizeUiColor(settings.ThemeReadStart, _cfg.ThemeReadStart);
+    _cfg.ThemeReadEnd = NormalizeUiColor(settings.ThemeReadEnd, _cfg.ThemeReadEnd);
+    var previousEnableSecretMenu = _cfg.EnableSecretMenu;
+    if (settings.DisableSecretMenuAfterSave)
+    {
+      _cfg.EnableSecretMenu = false;
+    }
+
+    var saved = AppConfig.Save(_cfgPath, _cfg);
+    if (!saved && settings.DisableSecretMenuAfterSave)
+    {
+      _cfg.EnableSecretMenu = previousEnableSecretMenu;
+    }
+
+    await Dispatcher.InvokeAsync(() =>
+    {
+      Title = _cfg.UiAppTitle;
+    });
+
+    await PublishUiConfigAsync();
+    await SendToUiAsync("ui_settings_saved", new
+    {
+      success = saved,
+      message = saved
+        ? (settings.DisableSecretMenuAfterSave ? "UI settings saved. Secret menu disabled." : "UI settings saved.")
+        : "Unable to save UI settings to config."
+    });
+  }
+
+  private async Task SendToUiAsync(string type, object payload)
+  {
+    var envelopeJson = JsonSerializer.Serialize(new
+    {
+      type,
+      payload
+    }, _jsonOptions);
+
+    await Dispatcher.InvokeAsync(() =>
+    {
+      try
+      {
+        if (Web.CoreWebView2 is null) return;
+        Web.CoreWebView2.PostWebMessageAsJson(envelopeJson);
+      }
+      catch
+      {
+      }
+    });
   }
 
   private List<ArchivedMessage> LoadArchivedMessagesFromDisk()
@@ -1383,6 +1841,41 @@ public partial class MainWindow
       .ToList();
   }
 
+  private Task<bool> ArchivePostsAsync(IReadOnlyList<UiPost> posts)
+  {
+    if (!_archiveMessagesEnabled || posts.Count == 0) return Task.FromResult(false);
+
+    var updated = false;
+    foreach (var post in posts)
+    {
+      if (TryArchivePost(post))
+      {
+        updated = true;
+      }
+    }
+
+    return Task.FromResult(updated);
+  }
+
+  private bool TryArchivePost(UiPost post)
+  {
+    var markRead = new MarkReadMessage
+    {
+      PostId = post.Id ?? "",
+      Code = post.Code ?? "",
+      PostKey = BuildArchiveSourceKey(post),
+      Title = post.Title ?? "",
+      Content = post.Content ?? "",
+      Category = post.Category ?? "Update",
+      DateUtc = post.DateUtc,
+      PostUrl = post.PostUrl,
+      LinkUrl = post.LinkUrl,
+      LinkText = post.LinkText
+    };
+
+    return TryArchiveAcknowledgedMessage(markRead);
+  }
+
   private bool TryArchiveAcknowledgedMessage(MarkReadMessage message)
   {
     if (!_archiveMessagesEnabled) return false;
@@ -1412,6 +1905,7 @@ public partial class MainWindow
     {
       ArchiveId = Guid.NewGuid().ToString("N"),
       SourcePostId = (message.PostId ?? "").Trim(),
+      SourcePostCode = string.IsNullOrWhiteSpace(message.Code) ? null : message.Code.Trim(),
       SourcePostKey = sourceKey,
       Title = (message.Title ?? "").Trim(),
       Content = (message.Content ?? "").Trim(),
@@ -1469,8 +1963,28 @@ public partial class MainWindow
 
     var title = (message.Title ?? "").Trim();
     var dateUtc = (message.DateUtc ?? "").Trim();
+    var postUrl = (message.PostUrl ?? "").Trim();
+    var linkUrl = (message.LinkUrl ?? "").Trim();
     var content = (message.Content ?? "").Trim();
-    var composed = $"local:{title}|{dateUtc}|{content}";
+    var composed = !string.IsNullOrWhiteSpace(postUrl) || !string.IsNullOrWhiteSpace(linkUrl)
+      ? $"local:{title}|{dateUtc}|{postUrl}|{linkUrl}|{content}"
+      : $"local:{title}|{dateUtc}|{content}";
+    return composed.Trim();
+  }
+
+  private static string BuildArchiveSourceKey(UiPost post)
+  {
+    if (!string.IsNullOrWhiteSpace(post.Id))
+      return post.Id.Trim();
+
+    var title = (post.Title ?? "").Trim();
+    var dateUtc = (post.DateUtc ?? "").Trim();
+    var postUrl = (post.PostUrl ?? "").Trim();
+    var linkUrl = (post.LinkUrl ?? "").Trim();
+    var content = (post.Content ?? "").Trim();
+    var composed = !string.IsNullOrWhiteSpace(postUrl) || !string.IsNullOrWhiteSpace(linkUrl)
+      ? $"local:{title}|{dateUtc}|{postUrl}|{linkUrl}|{content}"
+      : $"local:{title}|{dateUtc}|{content}";
     return composed.Trim();
   }
 
@@ -1569,7 +2083,9 @@ public partial class MainWindow
 
   private static UiPost? MapPost(JsonElement obj)
   {
-    var id = ReadString(obj, "id") ?? ReadString(obj, "postId") ?? "";
+    var code = ReadFirstString(obj, "code", "postCode", "post_code");
+    var id = ReadFirstString(obj, TrackIdPropertyNames) ?? "";
+    var trackIdCandidates = BuildTrackIdCandidates(obj, id, code);
     var title = ReadString(obj, "title") ?? "Untitled post";
 
     var content = ReadString(obj, "content");
@@ -1588,6 +2104,8 @@ public partial class MainWindow
     var post = new UiPost
     {
       Id = id,
+      Code = code,
+      TrackIdCandidates = trackIdCandidates,
       Title = title,
       Content = content?.Trim() ?? "",
       Category = ReadString(obj, "category") ?? "Update",
@@ -1599,6 +2117,40 @@ public partial class MainWindow
     };
 
     return post;
+  }
+
+  private static List<string> BuildTrackIdCandidates(JsonElement obj, string? preferredId, string? code)
+  {
+    var seen = new HashSet<string>(StringComparer.Ordinal);
+    var candidates = new List<string>();
+
+    static void AddCandidate(List<string> sink, HashSet<string> seenIds, string? value)
+    {
+      var candidate = (value ?? "").Trim();
+      if (string.IsNullOrWhiteSpace(candidate)) return;
+      if (seenIds.Add(candidate))
+      {
+        sink.Add(candidate);
+      }
+    }
+
+    AddCandidate(candidates, seen, preferredId);
+
+    foreach (var key in TrackIdPropertyNames)
+    {
+      AddCandidate(candidates, seen, ReadString(obj, key));
+    }
+
+    if (obj.TryGetProperty("post", out var nestedPost) && nestedPost.ValueKind == JsonValueKind.Object)
+    {
+      foreach (var key in TrackIdPropertyNames)
+      {
+        AddCandidate(candidates, seen, ReadString(nestedPost, key));
+      }
+    }
+
+    AddCandidate(candidates, seen, code);
+    return candidates;
   }
 
   private static string? ParseDateToIsoUtc(string? raw)
@@ -1640,6 +2192,20 @@ public partial class MainWindow
     };
   }
 
+  private static string? ReadFirstString(JsonElement obj, params string[] propertyNames)
+  {
+    foreach (var propertyName in propertyNames)
+    {
+      var value = ReadString(obj, propertyName);
+      if (!string.IsNullOrWhiteSpace(value))
+      {
+        return value;
+      }
+    }
+
+    return null;
+  }
+
   private static string ReadJsonMessageString(JsonElement obj, string propertyName)
   {
     if (!obj.TryGetProperty(propertyName, out var value)) return "";
@@ -1652,6 +2218,33 @@ public partial class MainWindow
       JsonValueKind.False => "false",
       _ => ""
     };
+  }
+
+  private static List<string> ReadJsonStringArray(JsonElement obj, string propertyName)
+  {
+    var values = new List<string>();
+    if (!obj.TryGetProperty(propertyName, out var arrayValue)) return values;
+    if (arrayValue.ValueKind != JsonValueKind.Array) return values;
+
+    foreach (var item in arrayValue.EnumerateArray())
+    {
+      var value = item.ValueKind switch
+      {
+        JsonValueKind.String => item.GetString() ?? "",
+        JsonValueKind.Number => item.GetRawText(),
+        JsonValueKind.True => "true",
+        JsonValueKind.False => "false",
+        _ => ""
+      };
+
+      value = value.Trim();
+      if (!string.IsNullOrWhiteSpace(value))
+      {
+        values.Add(value);
+      }
+    }
+
+    return values;
   }
 
   private static bool? ReadBool(JsonElement obj, string propertyName)
@@ -1836,8 +2429,28 @@ public partial class MainWindow
     {
       refresh_ms = _cfg.RefreshMs,
       max_posts = _cfg.MaxPosts,
-      archive_messages = _archiveMessagesEnabled,
-      config_path = _cfgPath
+      product_id = _cfg.ProductId,
+      beamer_user_id = _beamerVisitorUserId,
+      custom_user_id = _viewerUserId,
+      viewer_user_id = _viewerUserId,
+      viewer_first_name = _viewerFirstName,
+      viewer_last_name = _viewerLastName,
+      viewer_email = _viewerEmail,
+      config_path = _cfgPath,
+      enable_secret_menu = _cfg.EnableSecretMenu,
+      ui_app_title = _cfg.UiAppTitle,
+      ui_header_title = _cfg.UiHeaderTitle,
+      theme_page_background = _cfg.ThemePageBackground,
+      theme_header_start = _cfg.ThemeHeaderStart,
+      theme_header_end = _cfg.ThemeHeaderEnd,
+      theme_text_main = _cfg.ThemeTextMain,
+      theme_text_muted = _cfg.ThemeTextMuted,
+      theme_accent = _cfg.ThemeAccent,
+      theme_accent_soft = _cfg.ThemeAccentSoft,
+      theme_unread_start = _cfg.ThemeUnreadStart,
+      theme_unread_end = _cfg.ThemeUnreadEnd,
+      theme_read_start = _cfg.ThemeReadStart,
+      theme_read_end = _cfg.ThemeReadEnd
     };
 
     var json = JsonSerializer.Serialize(payload, _jsonOptions);

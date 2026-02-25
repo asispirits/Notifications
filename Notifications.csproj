@@ -1,11 +1,11 @@
-<!-- FILE: SpiritsNotifications.csproj -->
+<!-- FILE: Notifications.csproj -->
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
-    <AssemblyName>SpiritsNotifications</AssemblyName>
-    <RootNamespace>SpiritsNotifications</RootNamespace>
+    <AssemblyName>Notifications</AssemblyName>
+    <RootNamespace>Notifications</RootNamespace>
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -24,7 +24,7 @@
 
   <ItemGroup>
     <EmbeddedResource Include="index.html" />
-    <EmbeddedResource Include="SpiritsNotifications.config.json" />
+    <EmbeddedResource Include="Notifications.config.json" />
     <Resource Include="Assets/Spirits.ico" />
     <Resource Include="Assets/app_icon.png" />
   </ItemGroup>

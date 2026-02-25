@@ -1,4 +1,4 @@
-namespace SpiritsNotifications;
+namespace Notifications;
 
 public partial class App
 {
