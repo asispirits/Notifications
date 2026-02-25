@@ -89,7 +89,7 @@ Recommended folder structure:
 1. Build publish output:
 
 ```bash
-cd /Users/scottwells/Documents/Notifications
+cd <repo-root>
 dotnet publish Notifications.csproj -c Release -r win-x64 --self-contained true -nologo
 ```
 
@@ -98,8 +98,8 @@ dotnet publish Notifications.csproj -c Release -r win-x64 --self-contained true 
 4. Zip package with brand-specific name:
 
 ```bash
-cd /Users/scottwells/Documents/Notifications/bin/Release/net8.0-windows/win-x64/publish
-zip -r -FS /Users/scottwells/Documents/Notifications/Notifications_<brand>_win-x64_publish.zip .
+cd <repo-root>/bin/Release/net8.0-windows/win-x64/publish
+zip -r -FS <repo-root>/Notifications_<brand>_win-x64_publish.zip .
 ```
 
 ## 7. When to Rename App/Binary for a Brand
@@ -147,7 +147,7 @@ Higher-risk changes (require regression testing):
 If repository name changes to `Notifications`, update remote URL:
 
 ```bash
-cd /Users/scottwells/Documents/Notifications
+cd <repo-root>
 git remote set-url origin https://github.com/asispirits/Notifications.git
 git remote -v
 ```

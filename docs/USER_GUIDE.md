@@ -102,4 +102,4 @@ This lets older posts remain readable even if they expire or are deleted in Beam
 
 For detailed fault handling:
 
-`/Users/scottwells/Documents/Notifications/docs/TROUBLESHOOTING.md`
+`./TROUBLESHOOTING.md`

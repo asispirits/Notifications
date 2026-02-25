@@ -6,7 +6,7 @@ This checklist defines exactly what screenshots to capture and where to place th
 
 Save all screenshots to:
 
-`/Users/scottwells/Documents/Notifications/docs/screenshots`
+`docs/screenshots`
 
 Use the exact filenames below.
 
@@ -56,7 +56,7 @@ Use the exact filenames below.
 After images are captured, run:
 
 ```bash
-cd /Users/scottwells/Documents/Notifications
+cd <repo-root>
 ls -1 docs/screenshots
 ```
 

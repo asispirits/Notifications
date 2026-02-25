@@ -9,44 +9,44 @@
 
 ## 2. Solution Layout
 
-- `/Users/scottwells/Documents/Notifications/Notifications.sln`
-- `/Users/scottwells/Documents/Notifications/Notifications.csproj`
-- `/Users/scottwells/Documents/Notifications/MainWindow.xaml`
-- `/Users/scottwells/Documents/Notifications/MainWindow.xaml.cs`
-- `/Users/scottwells/Documents/Notifications/index.html`
-- `/Users/scottwells/Documents/Notifications/Config.cs`
-- `/Users/scottwells/Documents/Notifications/Notifications.config.json`
+- `Notifications.sln`
+- `Notifications.csproj`
+- `MainWindow.xaml`
+- `MainWindow.xaml.cs`
+- `index.html`
+- `Config.cs`
+- `Notifications.config.json`
 
 ## 3. Build and Publish
 
 ### Build
 
 ```bash
-cd /Users/scottwells/Documents/Notifications
+cd <repo-root>
 dotnet build Notifications.csproj -c Release -nologo
 ```
 
 ### Publish
 
 ```bash
-cd /Users/scottwells/Documents/Notifications
+cd <repo-root>
 dotnet publish Notifications.csproj -c Release -r win-x64 --self-contained true -nologo
 ```
 
 Publish output folder:
 
-`/Users/scottwells/Documents/Notifications/bin/Release/net8.0-windows/win-x64/publish`
+`bin/Release/net8.0-windows/win-x64/publish`
 
 Primary binary:
 
-`/Users/scottwells/Documents/Notifications/bin/Release/net8.0-windows/win-x64/publish/Notifications.exe`
+`bin/Release/net8.0-windows/win-x64/publish/Notifications.exe`
 
 ## 4. Packaging a Distribution ZIP
 
 ```bash
-cd /Users/scottwells/Documents/Notifications/bin/Release/net8.0-windows/win-x64/publish
-cp -f /Users/scottwells/Documents/Notifications/Notifications.config.json ./
-zip -r -FS /Users/scottwells/Documents/Notifications/Notifications_win-x64_publish.zip .
+cd <repo-root>/bin/Release/net8.0-windows/win-x64/publish
+cp -f <repo-root>/Notifications.config.json ./
+zip -r -FS <repo-root>/Notifications_win-x64_publish.zip .
 ```
 
 ## 5. Host/UI Responsibilities
@@ -91,7 +91,7 @@ When adding config fields:
 
 For white-label or customer-specific branding, use this playbook:
 
-`/Users/scottwells/Documents/Notifications/docs/BRANDING_CUSTOMIZATION_GUIDE.md`
+`./BRANDING_CUSTOMIZATION_GUIDE.md`
 
 Default recommendation:
 
@@ -104,7 +104,7 @@ Default recommendation:
 If GitHub repository is renamed from `Beamer-Viewer` to `Notifications`, update local remote URL:
 
 ```bash
-cd /Users/scottwells/Documents/Notifications
+cd <repo-root>
 git remote -v
 git remote set-url origin https://github.com/asispirits/Notifications.git
 git remote -v
