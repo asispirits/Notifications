@@ -1,0 +1,5 @@
+endpoint_name,user_id,tenant,brand,region,market,site,role,env,extra_segments
+store104-pos01,store-104-pos-01,asi,spirits,east,midatlantic,store-104,cashier,prod,
+store104-mgr01,store-104-mgr-01,asi,spirits,east,midatlantic,store-104,manager,prod,
+store205-pos01,store-205-pos-01,asi,spirits,west,pacific,store-205,cashier,prod,
+hq-admin01,hq-admin-01,asi,spirits,central,hq,hq,admin,prod,alerts:critical

@@ -16,116 +16,115 @@ At startup, the app resolves config in this order:
 6. `%AppData%/Beamer_viewer/Beamerviewer.config.json` (auto-migrated)
 7. Embedded template extraction to `%AppData%/Notifications/Notifications.config.json`
 
-## 2. Full Config Example
+## 2. Widget Build Example
 
 ```json
 {
   "ProductId": "vEjlRlWp82033",
-  "UserId": "",
+  "UserId": "store-104-pos-01",
   "ViewerUserId": "",
   "ViewerName": "",
   "ViewerEmail": "",
-  "ApiKey": "",
-  "ApiBaseUrl": "https://api.getbeamer.com/v0",
-  "MaxPosts": 25,
-  "RequestTimeoutMs": 10000,
-  "RefreshMs": 5000,
-  "WidgetWidth": 520,
+  "WidgetWidth": 560,
   "AutoOpenOnLaunch": true,
-  "ManualCloseCooldownMs": 6000,
-  "PulseOnNewMessage": true,
-  "PulseMinIntervalMs": 15000,
-  "ForceForegroundOnUrgent": false,
-  "UrgentFocusUnreadDelta": 3,
-  "FocusStealCooldownMs": 45000,
-  "EnableViewTracking": true,
+  "WidgetRefreshMs": 30000,
+  "SegmentFilters": "tenant:asi;brand:spirits;region:east;site:store-104;role:cashier;env:prod",
+  "SegmentRole": "",
+  "SegmentFilter": "",
+  "SegmentForceFilter": "",
+  "SegmentMultiUser": true,
+  "IncludeViewerUserIdSegment": false,
+  "EnableLaunchWatchdogTask": true,
+  "LaunchWatchdogTaskName": "Notifications Widget Watchdog",
+  "LaunchWatchdogIntervalMinutes": 30,
   "Ui": {
     "EnableSecretMenu": false,
-    "AppTitle": "Notifications",
-    "HeaderTitle": "Notifications",
-    "ThemePageBackground": "#ffffff",
-    "ThemeHeaderStart": "#ffffff",
-    "ThemeHeaderEnd": "#f5faff",
-    "ThemeTextMain": "#1a4e86",
-    "ThemeTextMuted": "#4b6f95",
-    "ThemeAccent": "#0000ff",
-    "ThemeAccentSoft": "#80ffff",
-    "ThemeUnreadStart": "#6bbbf6",
-    "ThemeUnreadEnd": "#519fdd",
-    "ThemeReadStart": "#758499",
-    "ThemeReadEnd": "#657486"
+    "AppTitle": "Notifications Widget Demo"
   }
 }
 ```
 
-## 3. Core Fields
+## 3. Core Widget Fields
 
 | Field | Type | Default | Notes |
 |---|---|---:|---|
-| `ProductId` | string | `vEjlRlWp82033` | Required for API and tracking. |
-| `UserId` | string | `""` | If blank, app generates `local-<guid>` internally. |
-| `ViewerUserId` | string | `""` | Override identity sent to Beamer. |
-| `ViewerName` | string | `""` | Override display name sent to Beamer. |
-| `ViewerEmail` | string | `""` | Optional user email for tracking payloads. |
-| `ApiKey` | string | `""` | Required for successful post fetches. |
-| `ApiBaseUrl` | string | `https://api.getbeamer.com/v0` | Trimmed and trailing `/` removed. |
-| `MaxPosts` | int | `25` | Clamped to `1..100`. |
-| `RequestTimeoutMs` | long | `10000` | Clamped to `2000..60000`. |
-| `RefreshMs` | long | `60000` internal default; template currently `5000` | Clamped to minimum `1000`. |
-| `WidgetWidth` | int | `520` | If `<320`, reset to `520`. |
-| `AutoOpenOnLaunch` | bool | `true` | Present for compatibility. |
-| `ManualCloseCooldownMs` | long | `6000` | Clamped to `0..120000`. |
-| `PulseOnNewMessage` | bool | `true` | Present for compatibility. |
-| `PulseMinIntervalMs` | long | `15000` | Clamped to `0..600000`. |
-| `ForceForegroundOnUrgent` | bool | `false` | Present; new-message foreground is currently enforced directly. |
-| `UrgentFocusUnreadDelta` | int | `3` | Clamped to `1..50`. |
-| `FocusStealCooldownMs` | long | `45000` | Clamped to `0..600000`. |
-| `EnableViewTracking` | bool | `true` | Controls posting read/view tracking to Beamer. |
+| `ProductId` | string | `vEjlRlWp82033` | Beamer product ID. |
+| `UserId` | string | `""` | Stable endpoint identity. If blank, app falls back to `ViewerUserId`/`cheader`/OS user. |
+| `ViewerUserId` | string | `""` | Optional explicit viewer user id fallback. |
+| `ViewerName` | string | `""` | Optional explicit display name fallback. |
+| `ViewerEmail` | string | `""` | Optional email passed to Beamer. |
+| `WidgetWidth` | int | `520` | Window width; minimum 320. |
+| `AutoOpenOnLaunch` | bool | `true` | Open widget automatically at startup. |
+| `WidgetRefreshMs` | long | `30000` | Soft refresh cadence; clamped `30000..3600000`. |
 
-## 4. UI Fields (`Ui` object)
+## 4. Segmentation Fields
 
-| Field | Type | Default | Validation |
+| Field | Type | Default | Notes |
 |---|---|---:|---|
-| `Ui.EnableSecretMenu` | bool | `false` | When `true`, shows `SETTINGS` button. |
-| `Ui.AppTitle` | string | `Notifications` | Trimmed; max length 80. |
-| `Ui.HeaderTitle` | string | `Notifications` | Trimmed; max length 80. |
-| `Ui.ThemePageBackground` | string | `#ffffff` | Must match `#RRGGBB`. |
-| `Ui.ThemeHeaderStart` | string | `#ffffff` | Must match `#RRGGBB`. |
-| `Ui.ThemeHeaderEnd` | string | `#f5faff` | Must match `#RRGGBB`. |
-| `Ui.ThemeTextMain` | string | `#1a4e86` | Must match `#RRGGBB`. |
-| `Ui.ThemeTextMuted` | string | `#4b6f95` | Must match `#RRGGBB`. |
-| `Ui.ThemeAccent` | string | `#0000ff` | Must match `#RRGGBB`. |
-| `Ui.ThemeAccentSoft` | string | `#80ffff` | Must match `#RRGGBB`. |
-| `Ui.ThemeUnreadStart` | string | `#6bbbf6` | Must match `#RRGGBB`. |
-| `Ui.ThemeUnreadEnd` | string | `#519fdd` | Must match `#RRGGBB`. |
-| `Ui.ThemeReadStart` | string | `#758499` | Must match `#RRGGBB`. |
-| `Ui.ThemeReadEnd` | string | `#657486` | Must match `#RRGGBB`. |
+| `SegmentFilters` | string | `""` | Primary segmentation string. Use semicolon-delimited tags. |
+| `IncludeViewerUserIdSegment` | bool | `false` | Appends viewer `UserId` as a segment token. |
+| `SegmentMultiUser` | bool | `true` | Enables per-user Beamer cookie scoping. |
+| `SegmentForceFilter` | string | `""` | Optional Beamer `force_filter` override. |
+| `SegmentRole` | string | `""` | Legacy compatibility. Included if non-empty. |
+| `SegmentFilter` | string | `""` | Legacy compatibility. Included if non-empty. |
 
-## 5. Legacy Compatibility
+### 4.1 Segment Resolution Priority
 
-The loader also reads legacy top-level UI keys when present:
+The app builds final segment filters in this order:
 
-- `EnableSecretMenu`
-- `UiAppTitle`
-- `UiHeaderTitle`
-- `Theme*`
+1. `SegmentFilters` (all tokens)
+2. `SegmentRole` (if set)
+3. `SegmentFilter` (if set)
+4. Viewer `UserId` (if `IncludeViewerUserIdSegment=true`)
 
-These are mapped into `Ui.*` at load time.
+Duplicates are removed case-insensitively.
 
-## 6. Identity Source Priority
+### 4.2 Segment Format
 
-For viewer identity sent to Beamer:
+- Use lowercase tags
+- Prefer `key:value` style
+- Separate tags with `;`
 
-1. `ViewerName` / `ViewerUserId` from config (if non-empty)
-2. `Cname` / `Cthisreg` from `C:\TEMP\cheader.dbf`
-3. `Environment.MachineName` / `Environment.UserName` fallback
+Example:
 
-## 7. Secret Menu Save Behavior
+`tenant:asi;brand:spirits;region:east;site:store-104;role:cashier;env:prod`
 
-When the user clicks `Save & Close` in the secret menu:
+## 5. Watchdog Scheduled Task Fields
 
-- UI settings are saved to config.
-- `Ui.EnableSecretMenu` is forced to `false`.
-- Menu closes.
+| Field | Type | Default | Notes |
+|---|---|---:|---|
+| `EnableLaunchWatchdogTask` | bool | `false` | When true, app attempts to create/update watchdog task. |
+| `LaunchWatchdogTaskName` | string | `Notifications Widget Watchdog` | Trimmed; max 120 chars. |
+| `LaunchWatchdogIntervalMinutes` | int | `30` | Clamped to `5..240`. |
 
-If save fails, `Ui.EnableSecretMenu` is not flipped.
+## 6. UI Fields (`Ui` object)
+
+| Field | Type | Default | Notes |
+|---|---|---:|---|
+| `Ui.EnableSecretMenu` | bool | `false` | Shows secret diagnostics/settings button. |
+| `Ui.AppTitle` | string | `Notifications` | Window title. |
+
+## 7. Legacy/Compatibility Fields
+
+The config model retains these for compatibility with the non-widget branch:
+
+- `ApiKey`, `ApiBaseUrl`, `MaxPosts`, `RequestTimeoutMs`, `RefreshMs`
+- `ManualCloseCooldownMs`, `PulseOnNewMessage`, `PulseMinIntervalMs`
+- `ForceForegroundOnUrgent`, `UrgentFocusUnreadDelta`, `FocusStealCooldownMs`, `EnableViewTracking`
+
+They are not primary controls for widget rendering.
+
+## 8. Identity Source Priority
+
+For Beamer identity used by the widget:
+
+1. `UserId` (if set)
+2. `ViewerUserId` (if set)
+3. `Cthisreg` from `C:\TEMP\cheader.dbf`
+4. `Environment.UserName`
+
+For display name:
+
+1. `ViewerName` (if set)
+2. `Cname` from `C:\TEMP\cheader.dbf`
+3. `Environment.MachineName`

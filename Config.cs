@@ -40,6 +40,17 @@ public sealed class AppConfig
   public long RefreshMs { get; set; } = 60_000;
   public int WidgetWidth { get; set; } = 520;
   public bool AutoOpenOnLaunch { get; set; } = true;
+  public long WidgetRefreshMs { get; set; } = 30_000;
+  public string SegmentFilters { get; set; } = "";
+  public string SegmentRole { get; set; } = "";
+  public string SegmentFilter { get; set; } = "";
+  public string SegmentForceFilter { get; set; } = "";
+  public bool SegmentMultiUser { get; set; } = true;
+  public bool IncludeViewerUserIdSegment { get; set; } = false;
+  public bool SegmentationInitialized { get; set; } = false;
+  public bool EnableLaunchWatchdogTask { get; set; } = false;
+  public string LaunchWatchdogTaskName { get; set; } = "Notifications Widget Watchdog";
+  public int LaunchWatchdogIntervalMinutes { get; set; } = 30;
 
   public long ManualCloseCooldownMs { get; set; } = 6_000;
   public bool PulseOnNewMessage { get; set; } = true;
@@ -201,10 +212,14 @@ public sealed class AppConfig
   private static AppConfig Normalize(AppConfig cfg)
   {
     if (string.IsNullOrWhiteSpace(cfg.ProductId)) cfg.ProductId = "vEjlRlWp82033";
-    if (string.IsNullOrWhiteSpace(cfg.UserId)) cfg.UserId = $"local-{Guid.NewGuid()}";
+    cfg.UserId = cfg.UserId?.Trim() ?? "";
     cfg.ViewerUserId = cfg.ViewerUserId?.Trim() ?? "";
     cfg.ViewerName = cfg.ViewerName?.Trim() ?? "";
     cfg.ViewerEmail = cfg.ViewerEmail?.Trim() ?? "";
+    cfg.SegmentFilters = NormalizeSegmentFilters(cfg.SegmentFilters);
+    cfg.SegmentRole = NormalizeSegmentValue(cfg.SegmentRole);
+    cfg.SegmentFilter = NormalizeSegmentValue(cfg.SegmentFilter);
+    cfg.SegmentForceFilter = NormalizeSegmentValue(cfg.SegmentForceFilter);
 
     cfg.Ui ??= new UiConfig();
     cfg.Ui.AppTitle = NormalizeTitle(cfg.Ui.AppTitle, "Notifications");
@@ -233,6 +248,16 @@ public sealed class AppConfig
     if (cfg.MaxPosts > 100) cfg.MaxPosts = 100;
 
     if (cfg.WidgetWidth < 320) cfg.WidgetWidth = 520;
+
+    if (cfg.WidgetRefreshMs < 30_000) cfg.WidgetRefreshMs = 30_000;
+    if (cfg.WidgetRefreshMs > 3_600_000) cfg.WidgetRefreshMs = 3_600_000;
+
+    cfg.LaunchWatchdogTaskName = (cfg.LaunchWatchdogTaskName ?? "").Trim();
+    if (string.IsNullOrWhiteSpace(cfg.LaunchWatchdogTaskName)) cfg.LaunchWatchdogTaskName = "Notifications Widget Watchdog";
+    if (cfg.LaunchWatchdogTaskName.Length > 120) cfg.LaunchWatchdogTaskName = cfg.LaunchWatchdogTaskName[..120];
+
+    if (cfg.LaunchWatchdogIntervalMinutes < 5) cfg.LaunchWatchdogIntervalMinutes = 5;
+    if (cfg.LaunchWatchdogIntervalMinutes > 240) cfg.LaunchWatchdogIntervalMinutes = 240;
 
     if (cfg.ManualCloseCooldownMs < 0) cfg.ManualCloseCooldownMs = 0;
     if (cfg.ManualCloseCooldownMs > 120_000) cfg.ManualCloseCooldownMs = 120_000;
@@ -435,6 +460,29 @@ public sealed class AppConfig
     var v = (value ?? "").Trim();
     if (!HexColorRegex.IsMatch(v)) return fallback;
     return v.ToLowerInvariant();
+  }
+
+  private static string NormalizeSegmentValue(string? value)
+  {
+    var v = (value ?? "").Trim();
+    if (v.Length <= 80) return v;
+    return v[..80];
+  }
+
+  private static string NormalizeSegmentFilters(string? value)
+  {
+    var tokens = (value ?? "")
+      .Split(';', StringSplitOptions.RemoveEmptyEntries)
+      .Select(static t => t.Trim())
+      .Where(static t => !string.IsNullOrWhiteSpace(t))
+      .Distinct(StringComparer.OrdinalIgnoreCase)
+      .ToArray();
+
+    if (tokens.Length == 0) return "";
+
+    var merged = string.Join(";", tokens);
+    if (merged.Length <= 3000) return merged;
+    return merged[..3000];
   }
 
   private static bool TryExtractEmbeddedTemplate(string targetPath)

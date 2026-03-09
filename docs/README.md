@@ -11,6 +11,7 @@ This folder contains the complete documentation set for the Notifications deskto
 - Technical architecture: `./TECHNICAL_ARCHITECTURE.md`
 - API and message contracts: `./API_AND_MESSAGE_CONTRACTS.md`
 - Configuration details (all fields): `./CONFIG_REFERENCE.md`
+- Segmentation setup (single guide): `./SEGMENTATION_GUIDE.md`
 - Troubleshooting procedures: `./TROUBLESHOOTING.md`
 - Screenshot capture plan: `./SCREENSHOT_CHECKLIST.md`
 
